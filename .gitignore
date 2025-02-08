@@ -2,3 +2,6 @@
 .DS_Store
 .vsc
 Computer Vision Mini Project.pdf
+Dataset/
+Dataset_resized_masks/
+Dataset_resized/
