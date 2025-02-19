@@ -11,7 +11,6 @@ from os.path import splitext, isfile, join
 from pathlib import Path
 from torch.utils.data import Dataset
 from tqdm import tqdm
-from torch import Tensor
 import os
 
 def load_image(filename):

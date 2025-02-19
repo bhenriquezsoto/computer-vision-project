@@ -18,12 +18,12 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 import wandb
-from evaluate import evaluate
+from evaluate import evaluate, dice_loss
 from unet_model import UNet
-from data_loading import BasicDataset, SegmentationDataset, dice_loss
+from data_loading import BasicDataset, SegmentationDataset
 
-dir_img = Path('Dataset/TrainVal/color')
-dir_mask = Path('Dataset/TrainVal/label')
+dir_img = Path('Dataset2/TrainVal/color')
+dir_mask = Path('Dataset2/TrainVal/label')
 dir_checkpoint = Path('src/a_unet/checkpoints/')
 
 
