@@ -18,7 +18,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 import wandb
-from evaluate import evaluate, dice_loss
+from evaluate import evaluate, dice_loss, multiclass_dice_coeff, pixel_accuracy, multiclass_iou
 from unet_model import UNet
 from data_loading import BasicDataset, SegmentationDataset
 
@@ -48,17 +48,16 @@ def train_model(
     #     print("CarvanaDataset failed, trying BasicDataset")
     #     dataset = BasicDataset(dir_img, dir_mask, img_scale)
 
-    # dataset = BasicDataset(dir_img, dir_mask, img_scale)
 
     transform = A.Compose([
         ######### TODO: Maybe take out this fist padding ##########
         # A.PadIfNeeded(min_height=300, min_width=300, border_mode=0, value=(0, 0, 0)),  # Pad small images to 300x300
         ######################################################
-        # A.LongestMaxSize(max_size=300, interpolation=0),  # Resize longest side to 300 (if necessary)
-        # A.PadIfNeeded(min_height=300, min_width=300, border_mode=0),  # Pad remaining images to 300x300
-        # A.RandomCrop(256, 256),  # Crop to fixed size
-        A.LongestMaxSize(max_size=128, interpolation=0),
-        A.PadIfNeeded(min_height=128, min_width=128, border_mode=0),
+        A.LongestMaxSize(max_size=300, interpolation=0),  # Resize longest side to 300 (if necessary)
+        A.PadIfNeeded(min_height=300, min_width=300, border_mode=0),  # Pad remaining images to 300x300
+        A.RandomCrop(256, 256),  # Crop to fixed size
+        # A.LongestMaxSize(max_size=256, interpolation=0),
+        # A.PadIfNeeded(min_height=256, min_width=256, border_mode=0),
         A.HorizontalFlip(p=0.5),  # Flip images & masks with 50% probability
         A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
         # A.ElasticTransform(alpha=1, sigma=50, alpha_affine=50, p=0.3),  # Elastic distortion
@@ -72,8 +71,6 @@ def train_model(
     ])
 
     dataset = BasicDataset(dir_img, dir_mask, img_scale, transform=transform)
-
-#     dataset = SegmentationDataset(dir_img, dir_mask, transform=transform)
 
     # 2. Split into train / validation partitions
     n_val = int(len(dataset) * val_percent)
@@ -118,6 +115,9 @@ def train_model(
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_loss = 0
+        # epoch_dice = 0 TODO: finish this
+        # epoch_iou = 0
+        # epoch_acc = 0
         with tqdm(total=n_train, desc=f'Epoch {epoch}/{epochs}', unit='img') as pbar:
             for batch in train_loader:
                 images, true_masks = batch['image'], batch['mask']
@@ -145,6 +145,11 @@ def train_model(
                             F.one_hot(true_masks_processed, model.n_classes).permute(0, 3, 1, 2).float(),
                             multiclass=True
                         )
+
+                        # TODO: Implement multiclass metrics
+                        # dice_score += multiclass_dice_coeff(masks_pred, true_masks_processed, reduce_batch_first=False)
+                        # iou += multiclass_iou(masks_pred, true_masks_processed, reduce_batch_first=False)
+                        # acc += pixel_accuracy(masks_pred.argmax(dim=1), true_masks_processed)
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
