@@ -6,3 +6,4 @@ Dataset/
 Dataset_resized_masks/
 Dataset_resized/
 DatasetOriginal
+src/weights/
