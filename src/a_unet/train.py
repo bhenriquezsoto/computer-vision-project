@@ -20,7 +20,7 @@ from albumentations.pytorch import ToTensorV2
 import wandb
 from evaluate import evaluate, dice_loss, multiclass_dice_coeff, pixel_accuracy, multiclass_iou
 from unet_model import UNet
-from data_loading import BasicDataset, SegmentationDataset
+from data_loading import SegmentationDataset
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
@@ -42,12 +42,6 @@ def train_model(
         gradient_clipping: float = 1.0,
 ):
     # 1. Create dataset
-    # try:
-    #     dataset = CarvanaDataset(dir_img, dir_mask, img_scale)
-    # except (AssertionError, RuntimeError, IndexError):
-    #     print("CarvanaDataset failed, trying BasicDataset")
-    #     dataset = BasicDataset(dir_img, dir_mask, img_scale)
-
 
     transform = A.Compose([
         ######### TODO: Maybe take out this fist padding ##########
@@ -68,7 +62,11 @@ def train_model(
         ToTensorV2()  # Convert to PyTorch tensor
     ])
 
-    dataset = BasicDataset(dir_img, dir_mask, img_scale, transform=transform)
+    
+    try:
+        dataset = SegmentationDataset(dir_img, dir_mask, transform=transform)
+    except (AssertionError, RuntimeError, IndexError):
+        print("SegmentationDataset failed, check data_loading.py")
 
     # 2. Split into train / validation partitions
     n_val = int(len(dataset) * val_percent)
@@ -236,7 +234,7 @@ if __name__ == '__main__':
     # n_channels=3 for RGB images
     # n_classes is the number of probabilities you want to get per pixel
     model = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
-    model = model.to(memory_format=torch.channels_last)
+    model = model.to(memory_format=torch.channels_last) # Tells PyTorch to store tensors in a format optimized for GPU efficiency
 
     logging.info(f'Network:\n'
                  f'\t{model.n_channels} input channels\n'
