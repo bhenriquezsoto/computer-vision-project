@@ -121,12 +121,13 @@ def train_model(
     grad_scaler = GradScaler(enabled=amp)
     criterion = nn.CrossEntropyLoss(ignore_index=255) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
+    best_val_iou = 0
 
     # 5. Begin training
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_loss = 0
-        best_val_dice = 0
+        
         
         total_dice = torch.zeros(model.n_classes, device=device)  # Store per-class Dice
         total_iou = torch.zeros(model.n_classes, device=device)   # Store per-class IoU
@@ -219,8 +220,8 @@ def train_model(
         logging.info(f"Epoch {epoch} - Validation Dice Score: {val_dice:.4f}, IoU: {val_iou:.4f}, Pixel Acc: {val_acc:.4f}")
 
         # Save the best model based on validation Dice Score
-        if val_dice >= best_val_dice:
-            best_val_dice = val_dice
+        if val_iou >= best_val_iou:
+            best_val_iou = val_iou
             run_name = wandb.run.name
             model_path = dir_checkpoint / f'best_model_{run_name}.pth'
             torch.save(model.state_dict(), str(model_path))
@@ -238,7 +239,7 @@ def train_model(
     logging.info("Training complete. Evaluating on test set...")
 
     # Load the best saved model
-    model.load_state_dict(torch.load(str(model_path), map_location=device))
+    model.load_state_dict(torch.load(str(model_path), map_location=device, weights_only=True))
     model.to(device)
     model.eval()
 
@@ -247,7 +248,7 @@ def train_model(
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     # Evaluate on the test set
-    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate(model, test_loader, device, amp=False)
+    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate(model, test_loader, device, amp=amp, desc='Testing round')
 
     # Print test results
     logging.info(f"Test Dice Score (Mean): {test_dice:.4f}")
