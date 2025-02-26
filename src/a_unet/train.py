@@ -191,6 +191,7 @@ def train_model(
         avg_dice = total_dice / len(train_loader)
         avg_iou = total_iou / len(train_loader)
         avg_acc = total_acc / len(train_loader)
+        epoch_loss /= len(train_loader)
 
         logging.info(f"Epoch {epoch} - Training Loss: {epoch_loss:.4f}, Dice Score: {avg_dice.mean().item():.4f}, IoU: {avg_iou.mean().item():.4f}, Pixel Acc: {avg_acc:.4f}")
 
@@ -223,7 +224,7 @@ def train_model(
             run_name = wandb.run.name
             model_path = dir_checkpoint / f'best_model_{run_name}.pth'
             torch.save(model.state_dict(), str(model_path))
-            logging.info('Best model saved as {model_path}!')
+            logging.info(f'Best model saved as {model_path}!')
 
         # Optionally save checkpoint every epoch
         if save_checkpoint:

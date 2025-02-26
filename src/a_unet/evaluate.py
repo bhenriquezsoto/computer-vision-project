@@ -17,7 +17,7 @@ def compute_dice_per_class(pred: Tensor, target: Tensor, n_classes: int = 3, eps
 
         dice_scores[cls] = dice
 
-    return dice_scores
+    return dice_scores 
 
 
 def compute_iou_per_class(pred: Tensor, target: Tensor, n_classes: int = 3, epsilon: float = 1e-6):
@@ -124,8 +124,8 @@ def evaluate(net, dataloader, device, amp, n_classes=3):
     net.train()
 
     # Compute mean metrics
-    mean_dice = total_dice.mean().item()
-    mean_iou = total_iou.mean().item()
+    mean_dice = total_dice.mean().item() / num_batches
+    mean_iou = total_iou.mean().item() / num_batches
     mean_acc = total_acc / num_batches
 
     return mean_dice, mean_iou, mean_acc, total_dice / num_batches, total_iou / num_batches
