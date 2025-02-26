@@ -82,8 +82,8 @@ class BasicDataset(Dataset):
             return mask
 
         else:
-            if img.ndim == 3 and img.shape[2] == 4:
-                img = img[:,:,:3]            
+            if img.ndim == 3 and img.shape[0] == 4:
+                img = img[:3,:,:]
             elif img.ndim == 2:
                 img = img[np.newaxis, ...]
             else:
@@ -110,12 +110,14 @@ class BasicDataset(Dataset):
         if self.transform:
             img = np.asarray(img)
             mask = np.asarray(mask)
+            if img.ndim == 3 and img.shape[2] == 4:
+                img = img[:,:,:3]
             augmented = self.transform(image=img, mask=mask)
             img, mask = augmented['image'], augmented['mask']
             # check that all images have dimensions (128, 128, 3)
             # and all masks have dimensions (128, 128)
-            assert img.shape == torch.Size([3, 128, 128]), f'Image has shape {img.shape}'
-            assert mask.shape == torch.Size([128, 128]), f'Mask has shape {mask.shape}'
+            assert img.shape == torch.Size([3, 256, 256]), f'Image {name} has shape {img.shape}'
+            assert mask.shape == torch.Size([256, 256]), f'Mask has shape {mask.shape}'
 
         else:
             img = self.preprocess(self.mask_values, img, self.scale, is_mask=False)
