@@ -4,94 +4,128 @@ from tqdm import tqdm
 from torch import Tensor
 
 
-def dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: bool = False, epsilon: float = 1e-6):
-    # Average of Dice coefficient for all batches, or for a single mask
-    assert input.size() == target.size()
-    assert input.dim() == 3 or not reduce_batch_first
+def compute_dice_per_class(pred: Tensor, target: Tensor, n_classes: int = 3, epsilon: float = 1e-6):
+    """Compute per-class Dice score."""
+    dice_scores = torch.zeros(n_classes, device=pred.device)
 
-    sum_dim = (-1, -2) if input.dim() == 2 or not reduce_batch_first else (-1, -2, -3)
+    for cls in range(n_classes):
+        pred_inds = (pred == cls)
+        target_inds = (target == cls)
 
-    inter = 2 * (input * target).sum(dim=sum_dim)
-    sets_sum = input.sum(dim=sum_dim) + target.sum(dim=sum_dim)
-    sets_sum = torch.where(sets_sum == 0, inter, sets_sum)
+        intersection = (pred_inds & target_inds).sum().float()
+        dice = (2 * intersection + epsilon) / (pred_inds.sum().float() + target_inds.sum().float() + epsilon)
 
-    dice = (inter + epsilon) / (sets_sum + epsilon)
-    return dice.mean()
+        dice_scores[cls] = dice
 
-
-def multiclass_dice_coeff(input: Tensor, target: Tensor, reduce_batch_first: bool = False, epsilon: float = 1e-6):
-    # Average of Dice coefficient for all classes
-    return dice_coeff(input.flatten(0, 1), target.flatten(0, 1), reduce_batch_first, epsilon)
+    return dice_scores
 
 
-def dice_loss(input: Tensor, target: Tensor, multiclass: bool = False):
-    # Dice loss (objective to minimize) between 0 and 1
-    fn = multiclass_dice_coeff if multiclass else dice_coeff
-    return 1 - fn(input, target, reduce_batch_first=True)
+def compute_iou_per_class(pred: Tensor, target: Tensor, n_classes: int = 3, epsilon: float = 1e-6):
+    """Compute per-class IoU."""
+    iou_scores = torch.zeros(n_classes, device=pred.device)
 
+    for cls in range(n_classes):
+        pred_inds = (pred == cls)
+        target_inds = (target == cls)
 
-def multiclass_iou(input: Tensor, target: Tensor, reduce_batch_first: bool = False, epsilon: float = 1e-6):
-    # Average of IoU for all classes
-    assert input.size() == target.size()
-    assert input.dim() == 3 or not reduce_batch_first
+        intersection = (pred_inds & target_inds).sum().float()
+        union = (pred_inds | target_inds).sum().float()
+        iou = (intersection + epsilon) / (union + epsilon)
 
-    sum_dim = (-1, -2) if input.dim() == 2 or not reduce_batch_first else (-1, -2, -3)
+        iou_scores[cls] = iou
 
-    inter = (input * target).sum(dim=sum_dim)
-    union = (input + target).sum(dim=sum_dim) - inter
+    return iou_scores
 
-    iou = (inter + epsilon) / (union + epsilon)
-    return iou.mean()
+def compute_pixel_accuracy(pred: Tensor, target: Tensor):
+    """Compute pixel accuracy (fraction of correctly classified pixels)."""
+    return (pred == target).sum().float() / target.numel()
 
+def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float = 1e-6):
+    """
+    Compute Dice loss for binary or multi-class segmentation.
 
-def pixel_accuracy(input: Tensor, target: Tensor):
-    # Fraction of correctly predicted pixels
-    assert input.size() == target.size()
+    - Uses sigmoid for binary segmentation.
+    - Uses softmax for multi-class segmentation.
+    - Computes per-class Dice scores and returns:
+        - Mean Dice score if `n_classes > 1` (multi-class).
+        - Single Dice score if `n_classes == 1` (binary segmentation).
 
-    correct = (input == target).sum()
-    total = input.numel()
-    return correct / total
+    Args:
+        input (Tensor): Model predictions (logits), shape (B, C, H, W)
+        target (Tensor): Ground truth segmentation masks, shape (B, H, W)
+        n_classes (int): Number of segmentation classes (default 1 for binary).
+        epsilon (float): Small constant for numerical stability.
+
+    Returns:
+        Tensor: Dice loss (scalar).
+    """
+    if n_classes == 1:  # Binary segmentation case
+        input = torch.sigmoid(input)  # Convert logits to probabilities
+        target = target.float()  # Ensure target is float
+        pred = input  # Use raw probability instead of thresholding
+    else:  # Multi-class segmentation case
+        input = torch.softmax(input, dim=1)  # Convert logits to class probabilities
+        target = F.one_hot(target, num_classes=n_classes).permute(0, 3, 1, 2).float()  # Convert to one-hot
+        pred = input  # Use probability scores instead of argmax
+
+    # Compute per-class Dice scores
+    dice_scores = compute_dice_per_class(pred, target, n_classes=n_classes, epsilon=epsilon)
+
+    # Take mean for multi-class, take scalar for binary
+    return 1 - (dice_scores.mean() if n_classes > 1 else dice_scores[0])
+
 
 @torch.inference_mode()
-def evaluate(net, dataloader, device, amp):
+def evaluate(net, dataloader, device, amp, n_classes=3):
+    """
+    Evaluates model on the validation dataset.
+
+    Returns:
+    - Mean Dice Score
+    - Mean IoU
+    - Mean Pixel Accuracy
+    - Per-class Dice Scores
+    - Per-class IoU Scores
+    """
     net.eval()
-    num_val_batches = len(dataloader)
-    dice_score = 0
-    iou = 0
-    acc = 0
+    num_batches = len(dataloader)
+
+    total_dice = torch.zeros(n_classes, device=device)
+    total_iou = torch.zeros(n_classes, device=device)
+    total_acc = 0
 
     # iterate over the validation set
     with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
-        for batch in tqdm(dataloader, total=num_val_batches, desc='Validation round', unit='batch', leave=False):
+        for batch in tqdm(dataloader, total=num_batches, desc='Validation round', unit='batch', leave=False):
             image, mask_true = batch['image'], batch['mask']
 
-            # move images and labels to correct device and type
+            # Move to correct device
             image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
             mask_true = mask_true.to(device=device, dtype=torch.long)
 
-            # predict the mask
+            # Predict masks
             mask_pred = net(image)
+            mask_pred = mask_pred.argmax(dim=1)  # Convert to class indices
 
-            if net.n_classes == 1:
-                assert mask_true.min() >= 0 and mask_true.max() <= 1, 'True mask indices should be in [0, 1]'
-                mask_pred = (F.sigmoid(mask_pred) > 0.5).float()
-                # compute the Dice score
-                dice_score += dice_coeff(mask_pred, mask_true, reduce_batch_first=False)
-            else:
-                true_masks_processed = mask_true.clone()
-                true_masks_processed[true_masks_processed == 255] = 0
-                assert true_masks_processed.min() >= 0 and true_masks_processed.max() < net.n_classes, 'True mask indices should be in [0, n_classes]'
-                # convert to one-hot format
-                true_masks_processed = F.one_hot(true_masks_processed, net.n_classes).permute(0, 3, 1, 2).float()
-                mask_pred = F.one_hot(mask_pred.argmax(dim=1), net.n_classes).permute(0, 3, 1, 2).float()
-                # compute the Dice score, ignoring background
-                dice_score += multiclass_dice_coeff(mask_pred[:, 1:], true_masks_processed[:, 1:], reduce_batch_first=False)
+            # Ignore `255` class (void label) in mask
+            mask_true = mask_true.clone()
+            mask_true[mask_true == 255] = 0  # Treat void label as background
 
-                # compute the IoU
-                iou += multiclass_iou(mask_pred[:, 1:], true_masks_processed[:, 1:], reduce_batch_first=False)
+            # Compute Dice Score, IoU, and Pixel Accuracy
+            dice_scores = compute_dice_per_class(mask_pred, mask_true, n_classes=n_classes)
+            iou_scores = compute_iou_per_class(mask_pred, mask_true, n_classes=n_classes)
+            pixel_acc = compute_pixel_accuracy(mask_pred, mask_true)
 
-                # compute the pixel accuracy
-                acc += pixel_accuracy(mask_pred.argmax(dim=1), true_masks_processed.argmax(dim=1))
+            # Accumulate results
+            total_dice += dice_scores
+            total_iou += iou_scores
+            total_acc += pixel_acc
 
     net.train()
-    return dice_score / max(num_val_batches, 1), iou / max(num_val_batches, 1), acc / max(num_val_batches, 1)
+
+    # Compute mean metrics
+    mean_dice = total_dice.mean().item()
+    mean_iou = total_iou.mean().item()
+    mean_acc = total_acc / num_batches
+
+    return mean_dice, mean_iou, mean_acc, total_dice / num_batches, total_iou / num_batches
