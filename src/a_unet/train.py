@@ -22,8 +22,8 @@ from evaluate import evaluate, dice_loss, multiclass_dice_coeff, pixel_accuracy,
 from unet_model import UNet
 from data_loading import BasicDataset, SegmentationDataset
 
-dir_img = Path('Dataset2/TrainVal/color')
-dir_mask = Path('Dataset2/TrainVal/label')
+dir_img = Path('Dataset/TrainVal/color')
+dir_mask = Path('Dataset/TrainVal/label')
 dir_checkpoint = Path('src/a_unet/checkpoints/')
 
 
@@ -34,7 +34,7 @@ def train_model(
         batch_size: int = 1,
         learning_rate: float = 1e-5,
         val_percent: float = 0.1,
-        save_checkpoint: bool = True,
+        save_checkpoint: bool = False,
         img_scale: float = 1,
         amp: bool = False,
         weight_decay: float = 1e-8,
@@ -56,14 +56,12 @@ def train_model(
         A.LongestMaxSize(max_size=300, interpolation=0),  # Resize longest side to 300 (if necessary)
         A.PadIfNeeded(min_height=300, min_width=300, border_mode=0),  # Pad remaining images to 300x300
         A.RandomCrop(256, 256),  # Crop to fixed size
-        # A.LongestMaxSize(max_size=256, interpolation=0),
-        # A.PadIfNeeded(min_height=256, min_width=256, border_mode=0),
         A.HorizontalFlip(p=0.5),  # Flip images & masks with 50% probability
         A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
-        # A.ElasticTransform(alpha=1, sigma=50, alpha_affine=50, p=0.3),  # Elastic distortion
+        A.ElasticTransform(alpha=1, sigma=50, alpha_affine=50, p=0.3),  # Elastic distortion
         # A.GridDistortion(p=0.3),  # Slight grid warping
-        # A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
-        # A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
+        A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
+        A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
         # A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
         # A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
         A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),  # Standard normalization
@@ -212,9 +210,9 @@ def train_model(
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
-    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=70, help='Number of epochs')
-    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=8, help='Batch size')
-    parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-5,
+    parser.add_argument('--epochs', '-e', metavar='E', type=int, default=50, help='Number of epochs')
+    parser.add_argument('--batch-size', '-b', dest='batch_size', metavar='B', type=int, default=16, help='Batch size')
+    parser.add_argument('--learning-rate', '-l', metavar='LR', type=float, default=1e-3,
                         help='Learning rate', dest='lr')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
     parser.add_argument('--scale', '-s', type=float, default=1, help='Downscaling factor of the images')
