@@ -11,7 +11,7 @@ import torchvision.transforms.functional as TF
 from pathlib import Path
 from torch import optim
 from torch.utils.data import DataLoader, random_split
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from tqdm import tqdm
 import numpy as np
@@ -126,6 +126,8 @@ def train_model(
     for epoch in range(1, epochs + 1):
         model.train()
         epoch_loss = 0
+        best_val_dice = 0
+        
         total_dice = torch.zeros(model.n_classes, device=device)  # Store per-class Dice
         total_iou = torch.zeros(model.n_classes, device=device)   # Store per-class IoU
         total_acc = 0  
@@ -216,7 +218,7 @@ def train_model(
         logging.info(f"Epoch {epoch} - Validation Dice Score: {val_dice:.4f}, IoU: {val_iou:.4f}, Pixel Acc: {val_acc:.4f}")
 
         # Save the best model based on validation Dice Score
-        if val_dice > best_val_dice:
+        if val_dice >= best_val_dice:
             best_val_dice = val_dice
             run_name = wandb.run.name
             model_path = dir_checkpoint / f'best_model_{run_name}.pth'
