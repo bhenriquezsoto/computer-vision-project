@@ -265,7 +265,7 @@ def train_model(
         for i, (dice, iou) in enumerate(zip(test_dice_per_class, test_iou_per_class)):
             f.write(f"Class {i} - Dice: {dice:.4f}, IoU: {iou:.4f}\n")
 
-    logging.info("Test evaluation complete. Results saved to test_results.txt")
+    logging.info(f"Test evaluation complete. Results saved to {str(model_path).replace('best_model', 'test_results').replace('.pth', '.txt')}")
 
     # Optional: Log test results to wandb
     experiment.log({
