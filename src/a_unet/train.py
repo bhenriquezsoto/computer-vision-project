@@ -96,7 +96,7 @@ def train_model(
         Batch size:      {batch_size}
         Learning rate:   {learning_rate}
         Weight decay:    {weight_decay}
-        Optimizer:       {model.optimizer}
+        Optimizer:       {optimizer}
         Training size:   {n_train}
         Validation size: {n_val}
         Checkpoints:     {save_checkpoint}
