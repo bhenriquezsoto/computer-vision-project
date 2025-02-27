@@ -112,7 +112,7 @@ class SegmentationDataset(Dataset):
         self.da = augmentation
         self.dim = dim
         
-        logging.info(f'Creating dataset with {len(self.ids)} examples')
+        logging.info(f'Creating dataset with {len(image_files)} examples')
         logging.info('Scanning mask files to determine unique values')
 
         # Use `masks` list directly instead of searching a directory
@@ -137,7 +137,7 @@ class SegmentationDataset(Dataset):
         img = load_image(img_file)
         
         assert img.shape[:2] == mask.shape[:2], \
-            f'Image and mask {name} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
+            f'Image and mask {img_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
             
         # Apply the transformations for data augmentation and/or preprocessing
         img, mask = preprocessing(img, mask, dim=self.dim, augmentation=self.da)
