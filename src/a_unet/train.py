@@ -1,23 +1,13 @@
 import argparse
 import logging
 import os
-import random
-import sys
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torchvision.transforms as transforms
-import torchvision.transforms.functional as TF
 from pathlib import Path
 from torch import optim
 from torch.utils.data import DataLoader, random_split
 from torch.amp import GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
 from tqdm import tqdm
-import numpy as np
-
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
+from sklearn.model_selection import train_test_split
 
 import wandb
 from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
@@ -45,37 +35,19 @@ def train_model(
         amp: bool = False,
         gradient_clipping: float = 1.0
 ):
-    # 1. Create dataset
+    # 1. Split into train / validation partitions
+    all_images = list(dir_img.glob('*'))
+    all_masks = list(dir_mask.glob('*'))
+    
+    assert len(all_images) == len(all_masks), "Number of images and masks do not match"
+    
+    train_images, val_images, train_masks, val_masks = train_test_split(all_images, all_masks, test_size=val_percent/100, random_state=42)
+    
+    
+    # 2. Create dataset. If augmentation is enabled, tune the augmentation parameters in 'data_loading.py'
 
-    # 1.1 Define transformations for data preprocessing and augmentation
-    transform = A.Compose([
-        ######### TODO: Maybe take out this fist padding ##########
-        # A.PadIfNeeded(min_height=300, min_width=300, border_mode=0, value=(0, 0, 0)),  # Pad small images to 300x300
-        ######################################################
-        A.LongestMaxSize(max_size=img_dim, interpolation=0),  # Resize longest side to 256 (if necessary)
-        A.PadIfNeeded(min_height=img_dim, min_width=img_dim, border_mode=0),  # Pad remaining images to 256x256
-        # A.RandomCrop(img_dim, img_dim),  # Crop to fixed size
-        A.HorizontalFlip(p=0.5),  # Flip images & masks with 50% probability
-        A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
-        A.ElasticTransform(alpha=1, sigma=50, p=0.3),  # Elastic distortion
-        A.GridDistortion(p=0.3),  # Slight grid warping
-        A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
-        A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
-        # A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
-        # A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
-        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),  # Standard normalization
-        ToTensorV2()  # Convert to PyTorch tensor
-    ])
-
-    try:
-        dataset = SegmentationDataset(dir_img, dir_mask, transform=transform, dim=img_dim)
-    except (AssertionError, RuntimeError, IndexError):
-        print("SegmentationDataset failed on training set, check data_loading.py")
-
-    # 2. Split into train / validation partitions
-    n_val = int(len(dataset) * val_percent)
-    n_train = len(dataset) - n_val
-    train_set, val_set = random_split(dataset, [n_train, n_val], generator=torch.Generator().manual_seed(0))
+    train_set = SegmentationDataset(train_images, train_masks, augmentation=True, dim=img_dim)
+    val_set = SegmentationDataset(val_images, val_masks, augmentation=False, dim=img_dim)
 
     print("Training set dimensions: ", len(train_set))
 
@@ -97,11 +69,11 @@ def train_model(
         Learning rate:   {learning_rate}
         Weight decay:    {weight_decay}
         Optimizer:       {optimizer}
-        Training size:   {n_train}
-        Validation size: {n_val}
+        Training size:   {len(train_set)}
+        Validation size: {len(val_set)}
         Checkpoints:     {save_checkpoint}
         Device:          {device.type}
-        Image dimensions: {img_dim}x{img_dim}
+        Image dimensions:{img_dim}x{img_dim}
         Mixed Precision: {amp}
     ''')
 
@@ -223,14 +195,18 @@ def train_model(
         if val_iou >= best_val_iou:
             best_val_iou = val_iou
             run_name = wandb.run.name
-            model_path = dir_checkpoint / f'best_model_{run_name}.pth'
-            torch.save(model.state_dict(), str(model_path))
+            model_path = os.path.join(dir_checkpoint, f'best_model_{run_name}.pth')
+            state_dict = model.state_dict()
+            state_dict['mask_values'] = dataset.mask_values
+            torch.save(model.state_dict, model_path)
             logging.info(f'Best model saved as {model_path}!')
 
         # Optionally save checkpoint every epoch
         if save_checkpoint:
-            checkpoint_path = dir_checkpoint / f'checkpoint_epoch{epoch}.pth'
-            torch.save(model.state_dict(), str(checkpoint_path))
+            checkpoint_path = os.path.join(dir_checkpoint, f'checkpoint_epoch{epoch}.pth')
+            state_dict = model.state_dict()
+            state_dict['mask_values'] = dataset.mask_values
+            torch.save(model.state_dict, checkpoint_path)
             logging.info(f'Checkpoint saved at {checkpoint_path}')
             
         
@@ -239,7 +215,7 @@ def train_model(
     logging.info("Training complete. Evaluating on test set...")
 
     # Load the best saved model
-    model.load_state_dict(torch.load(str(model_path), map_location=device, weights_only=True))
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     model.to(device)
     model.eval()
 

@@ -53,6 +53,40 @@ def unique_mask_values(idx, mask_dir, mask_suffix=''):
         return np.unique(mask, axis=0)
     else:
         raise ValueError(f'Loaded masks should have 2 or 3 dimensions, found {mask.ndim}')
+    
+def preprocessing(img, mask, dim, augmentation=False):
+    """Preprocess the image and mask for training."""
+    resizing = A.Compose([
+        A.LongestMaxSize(max_size=dim, interpolation=0),
+        A.PadIfNeeded(min_height=dim, min_width=dim, border_mode=0)
+    ])
+    normalisation = A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+    if not augmentation:
+        augmentation = A.Compose([
+            resizing,
+            normalisation,
+            ToTensorV2()
+        ])
+    else:
+        # 1.1 Define transformations for augmentation
+        augmentation = A.Compose([
+            resizing,
+            #### ADD AUGMENTATION HERE ####
+            # A.RandomCrop(img_dim, img_dim),  # Crop to fixed size
+            A.HorizontalFlip(p=0.5),  # Flip images & masks with 50% probability
+            A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
+            A.ElasticTransform(alpha=1, sigma=50, p=0.3),  # Elastic distortion
+            A.GridDistortion(p=0.3),  # Slight grid warping
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
+            A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
+            # A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
+            # A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
+            ### END AUGMENTATION ###
+            normalisation, 
+            ToTensorV2()  # Convert to PyTorch tensor
+        ])
+    augmented = augmentation(image=img, mask=mask)
+    return augmented['image'], augmented['mask']
 
 
 class SegmentationDataset(Dataset):
@@ -65,20 +99,12 @@ class SegmentationDataset(Dataset):
         transform (albumentations.Compose, optional): Data augmentation pipeline. Defaults to None. If none, defaultly resize the image to 256x256 and normalize it.
         scale (float, optional): Scaling factor for resizing. Defaults to None.
     """
-    def __init__(self, images_dir: str, mask_dir: str, mask_suffix: str = '', transform=None, dim: int = 256):
+    def __init__(self, images_dir: str, mask_dir: str, mask_suffix: str = '', augmentation: bool = False, dim: int = 256):
         self.images_dir = Path(images_dir)
         self.mask_dir = Path(mask_dir)
         self.mask_suffix = mask_suffix
-        self.transform = transform
-            
-        # Default transform if none is provided
-        if self.transform is None:
-            self.transform = A.Compose([
-                A.LongestMaxSize(max_size=dim, interpolation=0),
-                A.PadIfNeeded(min_height=dim, min_width=dim, border_mode=0),
-                A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-                ToTensorV2()
-            ])
+        self.da = augmentation
+        self.dim = dim
 
         self.ids = [splitext(file)[0] for file in listdir(images_dir) if isfile(join(images_dir, file)) and not file.startswith('.')]
         if not self.ids:
@@ -112,10 +138,9 @@ class SegmentationDataset(Dataset):
         assert img.shape[:2] == mask.shape[:2], \
             f'Image and mask {name} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
             
-        # Apply the transformmations for data augmentation
-        augmented = self.transform(image=img, mask=mask)
-
+        # Apply the transformmations for data augmentation and/or preprocessing
+        img, mask_file = preprocessing(img, mask, dim=self.dim, augmentation=self.da)
         return {
-            'image': augmented['image'],
-            'mask': augmented['mask']
+            'image': img,
+            'mask': mask
         }
