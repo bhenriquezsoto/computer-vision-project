@@ -220,7 +220,7 @@ def train_model(
     model.eval()
 
     # Load test dataset
-    test_dataset = SegmentationDataset(dir_test_img, dir_test_mask, transform=None, dim=img_dim)  # Use same preprocessing as training
+    test_dataset = SegmentationDataset(dir_test_img, dir_test_mask, augmentation=False, dim=img_dim)  # Use same preprocessing as training
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     # Evaluate on the test set

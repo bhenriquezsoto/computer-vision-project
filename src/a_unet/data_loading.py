@@ -126,7 +126,7 @@ class SegmentationDataset(Dataset):
         logging.info(f'Unique mask values: {self.mask_values}')
 
     def __len__(self):
-        return len(self.ids)
+        return len(self.image_files)
 
     def __getitem__(self, idx):
         img_file = self.image_files[idx]
