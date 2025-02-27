@@ -61,8 +61,8 @@ def train_model(
         A.GridDistortion(p=0.3),  # Slight grid warping
         A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
         A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
-        A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
-        A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
+        # A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
+        # A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
         A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),  # Standard normalization
         ToTensorV2()  # Convert to PyTorch tensor
     ])
@@ -87,8 +87,8 @@ def train_model(
     # (Initialize logging)
     experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
     experiment.config.update(
-        dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
-             val_percent=val_percent, save_checkpoint=save_checkpoint, img_scale=img_scale, amp=amp)
+        dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, weight_decay=weight_decay,ga
+             val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim, amp=amp)
     )
 
     logging.info(f'''Starting training:
@@ -101,7 +101,7 @@ def train_model(
         Validation size: {n_val}
         Checkpoints:     {save_checkpoint}
         Device:          {device.type}
-        Image dimensions: {img_scale}x{img_scale}
+        Image dimensions: {img_dim}x{img_dim}
         Mixed Precision: {amp}
     ''')
 
