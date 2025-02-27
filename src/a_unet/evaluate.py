@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 from torch import Tensor
+import numpy as np
 
 
 def compute_dice_per_class(pred: Tensor, target: Tensor, n_classes: int = 3, epsilon: float = 1e-6):
@@ -93,15 +94,10 @@ def evaluate(net, dataloader, device, amp, n_classes=3, desc='Validation round')
     total_dice = torch.zeros(n_classes, device=device)
     total_iou = torch.zeros(n_classes, device=device)
     total_acc = 0
-    
-    id = 0
 
     # iterate over the validation set
     with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
         for batch in tqdm(dataloader, total=num_batches, desc=desc, unit='batch', leave=False):        
-            if desc == 'Testing round':
-                print(f"Processing batch {id+1}/{num_batches}")
-                id += 1
             image, mask_true = batch['image'], batch['mask']
 
             # Move to correct device
