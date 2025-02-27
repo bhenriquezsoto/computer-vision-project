@@ -215,7 +215,7 @@ def train_model(
     logging.info("Training complete. Evaluating on test set...")
 
     # Load the best saved model
-    state_dict = torch.load(model_path, map_location=device)
+    state_dict = torch.load(model_path, map_location=device, weights_only=True)
     model.load_state_dict(state_dict['model_state_dict'])
     logging.info(f'Model loaded from {model_path}')
     model.to(device)
@@ -296,7 +296,7 @@ if __name__ == '__main__':
                  f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
 
     if args.load:
-        state_dict = torch.load(args.load, map_location=device)
+        state_dict = torch.load(args.load, map_location=device, weights_only=True)
         model.load_state_dict(state_dict['model_state_dict'])
         logging.info(f'Model loaded from {args.load}')
 
