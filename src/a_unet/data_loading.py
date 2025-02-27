@@ -99,24 +99,25 @@ class SegmentationDataset(Dataset):
         transform (albumentations.Compose, optional): Data augmentation pipeline. Defaults to None. If none, defaultly resize the image to 256x256 and normalize it.
         scale (float, optional): Scaling factor for resizing. Defaults to None.
     """
-    def __init__(self, images_dir: str, mask_dir: str, mask_suffix: str = '', augmentation: bool = False, dim: int = 256):
-        self.images_dir = Path(images_dir)
-        self.mask_dir = Path(mask_dir)
+    def __init__(self, images: str, masks: str, mask_suffix: str = '', augmentation: bool = False, dim: int = 256):
+        assert len(images) == len(masks), "Mismatch between number of images and masks!"
+
+        self.image_files = sorted(images)
+        self.mask_files = sorted(masks)
         self.mask_suffix = mask_suffix
         self.da = augmentation
         self.dim = dim
-
-        self.ids = [splitext(file)[0] for file in listdir(images_dir) if isfile(join(images_dir, file)) and not file.startswith('.')]
-        if not self.ids:
-            raise RuntimeError(f'No input file found in {images_dir}, make sure you put your images there')
-
+        
         logging.info(f'Creating dataset with {len(self.ids)} examples')
         logging.info('Scanning mask files to determine unique values')
+
+        # Use `masks` list directly instead of searching a directory
         with Pool() as p:
             unique = list(tqdm(
-                p.imap(partial(unique_mask_values, mask_dir=self.mask_dir, mask_suffix=self.mask_suffix), self.ids),
-                total=len(self.ids)
+                p.imap(unique_mask_values, self.mask_files),
+                total=len(self.mask_files)
             ))
+
         self.mask_values = list(sorted(np.unique(np.concatenate(unique), axis=0).tolist()))
         logging.info(f'Unique mask values: {self.mask_values}')
 
@@ -138,7 +139,7 @@ class SegmentationDataset(Dataset):
         assert img.shape[:2] == mask.shape[:2], \
             f'Image and mask {name} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
             
-        # Apply the transformmations for data augmentation and/or preprocessing
+        # Apply the transformations for data augmentation and/or preprocessing
         img, mask_file = preprocessing(img, mask, dim=self.dim, augmentation=self.da)
         return {
             'image': img,
