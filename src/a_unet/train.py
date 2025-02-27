@@ -199,7 +199,7 @@ def train_model(
             run_name = wandb.run.name
             model_path = os.path.join(dir_checkpoint, f'best_model_{run_name}.pth')
             state_dict = model.state_dict()
-            state_dict['mask_values'] = dataset.mask_values
+            state_dict['mask_values'] = train_set.mask_values
             torch.save(model.state_dict, model_path)
             logging.info(f'Best model saved as {model_path}!')
 
@@ -207,7 +207,7 @@ def train_model(
         if save_checkpoint:
             checkpoint_path = os.path.join(dir_checkpoint, f'checkpoint_epoch{epoch}.pth')
             state_dict = model.state_dict()
-            state_dict['mask_values'] = dataset.mask_values
+            state_dict['mask_values'] = train_set.mask_values
             torch.save(model.state_dict, checkpoint_path)
             logging.info(f'Checkpoint saved at {checkpoint_path}')
             
