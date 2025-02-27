@@ -112,7 +112,7 @@ class SegmentationDataset(Dataset):
         self.da = augmentation
         self.dim = dim
         
-        logging.info(f'Creating dataset with {len(image_files)} examples')
+        logging.info(f'Creating dataset with {len(self.image_files)} examples')
         logging.info('Scanning mask files to determine unique values')
 
         # Use `masks` list directly instead of searching a directory
