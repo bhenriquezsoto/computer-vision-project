@@ -107,7 +107,7 @@ def train_model(
         total_iou = torch.zeros(model.n_classes, device=device)   # Store per-class IoU
         total_acc = 0  
         
-        with tqdm(total=n_train, desc=f'Epoch {epoch}/{epochs}', unit='img', leave=True) as pbar:
+        with tqdm(total=len(train_set), desc=f'Epoch {epoch}/{epochs}', unit='img', leave=True) as pbar:
             for batch in train_loader:
                 images, true_masks = batch['image'], batch['mask']
 
