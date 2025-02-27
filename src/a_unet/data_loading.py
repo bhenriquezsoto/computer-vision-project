@@ -72,17 +72,17 @@ def preprocessing(img, mask, dim, augmentation=False):
             ToTensorV2()
         ])
     else:
-        # 1.1 Define transformations for augmentation
+        # Define transformations for augmentation
         augmentation = A.Compose([
             resizing,
             #### ADD AUGMENTATION HERE ####
             # A.RandomCrop(img_dim, img_dim),  # Crop to fixed size
             A.HorizontalFlip(p=0.5),  # Flip images & masks with 50% probability
             A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
-            A.ElasticTransform(alpha=1, sigma=50, p=0.3),  # Elastic distortion
-            A.GridDistortion(p=0.3),  # Slight grid warping
-            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
-            A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
+            # A.ElasticTransform(alpha=1, sigma=50, p=0.1),  # Elastic distortion
+            # A.GridDistortion(p=0.3),  # Slight grid warping
+            # A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
+            # A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
             # A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
             # A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
             ### END AUGMENTATION ###
