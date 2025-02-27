@@ -65,21 +65,17 @@ class SegmentationDataset(Dataset):
         transform (albumentations.Compose, optional): Data augmentation pipeline. Defaults to None. If none, defaultly resize the image to 256x256 and normalize it.
         scale (float, optional): Scaling factor for resizing. Defaults to None.
     """
-    def __init__(self, images_dir: str, mask_dir: str, mask_suffix: str = '', transform=None, scale: float = None):
+    def __init__(self, images_dir: str, mask_dir: str, mask_suffix: str = '', transform=None, dim: int = 256):
         self.images_dir = Path(images_dir)
         self.mask_dir = Path(mask_dir)
         self.mask_suffix = mask_suffix
         self.transform = transform
-        self.scale = scale
-        
-        if scale is not None:
-            assert 0 < scale <= 1, 'Scale must be between 0 and 1'
             
         # Default transform if none is provided
         if self.transform is None:
-            resize_transform = A.Resize(256, 256) if scale is None else A.Resize(int(scale * 256), int(scale * 256))
             self.transform = A.Compose([
-                resize_transform,
+                A.LongestMaxSize(max_size=dim, interpolation=0),
+                A.PadIfNeeded(min_height=dim, min_width=dim, border_mode=0),
                 A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
                 ToTensorV2()
             ])

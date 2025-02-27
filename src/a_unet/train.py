@@ -41,7 +41,7 @@ def train_model(
         weight_decay: float = 1e-4,
         val_percent: float = 0.1,
         save_checkpoint: bool = False,
-        img_scale: float = 1,
+        img_dim: int = 256,
         amp: bool = False,
         gradient_clipping: float = 1.0
 ):
@@ -52,23 +52,23 @@ def train_model(
         ######### TODO: Maybe take out this fist padding ##########
         # A.PadIfNeeded(min_height=300, min_width=300, border_mode=0, value=(0, 0, 0)),  # Pad small images to 300x300
         ######################################################
-        A.LongestMaxSize(max_size=256, interpolation=0),  # Resize longest side to 256 (if necessary)
-        A.PadIfNeeded(min_height=256, min_width=256, border_mode=0),  # Pad remaining images to 256x256
-        A.RandomCrop(256, 256),  # Crop to fixed size
+        A.LongestMaxSize(max_size=img_dim, interpolation=0),  # Resize longest side to 256 (if necessary)
+        A.PadIfNeeded(min_height=img_dim, min_width=img_dim, border_mode=0),  # Pad remaining images to 256x256
+        # A.RandomCrop(img_dim, img_dim),  # Crop to fixed size
         A.HorizontalFlip(p=0.5),  # Flip images & masks with 50% probability
         A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
         A.ElasticTransform(alpha=1, sigma=50, p=0.3),  # Elastic distortion
-        # A.GridDistortion(p=0.3),  # Slight grid warping
+        A.GridDistortion(p=0.3),  # Slight grid warping
         A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
         A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
-        # A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
-        # A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
+        A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
+        A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
         A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),  # Standard normalization
         ToTensorV2()  # Convert to PyTorch tensor
     ])
 
     try:
-        dataset = SegmentationDataset(dir_img, dir_mask, transform=transform)
+        dataset = SegmentationDataset(dir_img, dir_mask, transform=transform, dim=img_dim)
     except (AssertionError, RuntimeError, IndexError):
         print("SegmentationDataset failed on training set, check data_loading.py")
 
@@ -101,7 +101,7 @@ def train_model(
         Validation size: {n_val}
         Checkpoints:     {save_checkpoint}
         Device:          {device.type}
-        Images scaling:  {img_scale}
+        Image dimensions: {img_scale}x{img_scale}
         Mixed Precision: {amp}
     ''')
 
@@ -244,7 +244,7 @@ def train_model(
     model.eval()
 
     # Load test dataset
-    test_dataset = SegmentationDataset(dir_test_img, dir_test_mask, transform=None)  # Use same preprocessing as training
+    test_dataset = SegmentationDataset(dir_test_img, dir_test_mask, transform=None, dim=img_dim)  # Use same preprocessing as training
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     # Evaluate on the test set
@@ -287,7 +287,7 @@ def get_args():
     parser.add_argument('--weight-decay', '-wd', type=float, default=1e-4, help='Weight decay')
     parser.add_argument('--optimizer', '-o', type=str, choices=['adamw', 'adam', 'rmsprop', 'sgd'], default='adamw', help='Choose optimizer')
     parser.add_argument('--load', '-f', type=str, default=False, help='Load model from a .pth file')
-    parser.add_argument('--scale', '-s', type=float, default=1, help='Downscaling factor of the images')
+    parser.add_argument('--img-dim', '-s', type=int, default=256, help='Image dimension'),
     parser.add_argument('--validation', '-v', dest='val', type=float, default=10.0,
                         help='Percent of the data that is used as validation (0-100)')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
@@ -331,7 +331,7 @@ if __name__ == '__main__':
             weight_decay=args.weight_decay,
             optimizer=args.optimizer,
             device=device,
-            img_scale=args.scale,
+            img_dim=args.img_dim,
             val_percent=args.val / 100,
             amp=args.amp
         )
@@ -346,8 +346,10 @@ if __name__ == '__main__':
             epochs=args.epochs,
             batch_size=args.batch_size,
             learning_rate=args.lr,
+            weight_decay=args.weight_decay,
+            optimizer=args.optimizer,
             device=device,
-            img_scale=args.scale,
+            img_dim=args.img_dim,
             val_percent=args.val / 100,
             amp=args.amp
         )
