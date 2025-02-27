@@ -217,7 +217,10 @@ def train_model(
     logging.info("Training complete. Evaluating on test set...")
 
     # Load the best saved model
-    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
+    state_dict = torch.load(model_path, map_location=device, )
+    # del state_dict['mask_values']
+    model.load_state_dict(state_dict)
+    logging.info(f'Model loaded from {model_path}')
     model.to(device)
     model.eval()
 
@@ -239,7 +242,7 @@ def train_model(
         logging.info(f"Class {i} - Dice: {dice:.4f}, IoU: {iou:.4f}")
 
     # Save results to a file
-    with open(str(model_path).replace('best_model', 'test_results').replace('.pth', '.txt'), "w") as f:
+    with open(model_path.replace('best_model', 'test_results').replace('.pth', '.txt'), "w") as f:
         f.write(f"Test Dice Score (Mean): {test_dice:.4f}\n")
         f.write(f"Test IoU (Mean): {test_iou:.4f}\n")
         f.write(f"Test Pixel Accuracy: {test_acc:.4f}\n")
