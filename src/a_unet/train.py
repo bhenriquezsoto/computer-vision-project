@@ -43,7 +43,7 @@ def train_model(
     all_masks = list(dir_mask.glob('*'))
     
     
-    train_images, val_images, train_masks, val_masks = train_test_split(all_images, all_masks, test_size=val_percent/100, random_state=42)
+    train_images, val_images, train_masks, val_masks = train_test_split(all_images, all_masks, test_size=val_percent, random_state=42)
     
     
     # 2. Create dataset. If augmentation is enabled, tune the augmentation parameters in 'data_loading.py'
