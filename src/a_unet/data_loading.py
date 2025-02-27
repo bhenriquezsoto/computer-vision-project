@@ -26,6 +26,9 @@ def load_image(filename, is_mask=False):
     Returns:
         np.ndarray: Image or mask as NumPy array.
     """
+    if not Path(filename).exists():
+        raise FileNotFoundError(f"Error: File {filename} not found!")
+    
     ext = splitext(filename)[1]
         
     if ext == '.npy':
@@ -42,10 +45,10 @@ def load_image(filename, is_mask=False):
     return img
 
     
-def unique_mask_values(idx, mask_dir, mask_suffix=''):
+def unique_mask_values(mask_file):
     """Load mask file and return unique values."""
-    mask_file = list(mask_dir.glob(idx + mask_suffix + '.*'))[0]
-    mask = np.asarray(load_image(mask_file))
+    mask = np.asarray(load_image(mask_file, is_mask=True))
+    
     if mask.ndim == 2:
         return np.unique(mask)
     elif mask.ndim == 3:
@@ -53,6 +56,7 @@ def unique_mask_values(idx, mask_dir, mask_suffix=''):
         return np.unique(mask, axis=0)
     else:
         raise ValueError(f'Loaded masks should have 2 or 3 dimensions, found {mask.ndim}')
+
     
 def preprocessing(img, mask, dim, augmentation=False):
     """Preprocess the image and mask for training."""
@@ -125,22 +129,18 @@ class SegmentationDataset(Dataset):
         return len(self.ids)
 
     def __getitem__(self, idx):
-        name = self.ids[idx]
-        mask_file = list(self.mask_dir.glob(name + self.mask_suffix + '.*'))
-        img_file = list(self.images_dir.glob(name + '.*'))
-
-        assert len(img_file) == 1, f'Either no image or multiple images found for the ID {name}: {img_file}'
-        assert len(mask_file) == 1, f'Either no mask or multiple masks found for the ID {name}: {mask_file}'
+        img_file = self.image_files[idx]
+        mask_file = self.mask_files[idx]
         
         # Load the image and mask in PIL format 
-        mask = load_image(mask_file[0], is_mask=True)
-        img = load_image(img_file[0])
+        mask = load_image(mask_file, is_mask=True)
+        img = load_image(img_file)
         
         assert img.shape[:2] == mask.shape[:2], \
             f'Image and mask {name} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
             
         # Apply the transformations for data augmentation and/or preprocessing
-        img, mask_file = preprocessing(img, mask, dim=self.dim, augmentation=self.da)
+        img, mask = preprocessing(img, mask, dim=self.dim, augmentation=self.da)
         return {
             'image': img,
             'mask': mask
