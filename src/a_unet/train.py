@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import torch
 from torch import optim
+from torch import nn
 from torch.utils.data import DataLoader, random_split
 from torch.amp import GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
@@ -14,6 +15,7 @@ import wandb
 from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
 from unet_model import UNet
 from data_loading import SegmentationDataset
+
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
@@ -220,7 +222,9 @@ def train_model(
     model.eval()
 
     # Load test dataset
-    test_dataset = SegmentationDataset(dir_test_img, dir_test_mask, augmentation=False, dim=img_dim)  # Use same preprocessing as training
+    test_img_files = list(dir_test_img.glob('*'))
+    test_mask_files = list(dir_test_mask.glob('*'))
+    test_dataset = SegmentationDataset(test_img_files, test_mask_files, augmentation=False, dim=img_dim)  # Use same preprocessing as training
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     # Evaluate on the test set
