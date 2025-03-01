@@ -136,4 +136,4 @@ if __name__ == '__main__':
 
         if args.viz:
             logging.info(f'Visualizing results for image {filename}, close to continue...')
-            plot_img_and_mask(img, mask)
+            plot_img_and_mask(Image.open(filename), mask)
