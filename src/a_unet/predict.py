@@ -39,7 +39,7 @@ def predict_img(net,
         output = net(img).cpu()
         # print("output shape", output.shape)
         # print("output:", output)
-        output = F.interpolate(output, (full_img.shape[1], full_img.shape[0]), mode='bilinear')
+        output = F.interpolate(output, (full_img.shape[0], full_img.shape[1]), mode='bilinear')
         if net.n_classes > 1:
             probs = torch.softmax(output, dim=1)
             mask = torch.argmax(probs, dim=1)
