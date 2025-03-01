@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
 
-from data_loading import BasicDataset
+from data_loading import SegmentationDataset, load_image, preprocessing
 from unet_model import UNet
 
 import matplotlib.pyplot as plt
@@ -25,20 +25,24 @@ def plot_img_and_mask(img, mask):
     plt.show()
 
 def predict_img(net,
-                full_img,
+                filename,
                 device,
-                scale_factor=1,
+                dim=256,
                 out_threshold=0.5):
     net.eval()
-    img = torch.from_numpy(BasicDataset.preprocess(None, full_img, scale_factor, is_mask=False))
+    full_img = load_image(filename)
+    img, _ = preprocessing(img=full_img, mask=None, dim=dim)
     img = img.unsqueeze(0)
     img = img.to(device=device, dtype=torch.float32)
 
     with torch.no_grad():
         output = net(img).cpu()
-        output = F.interpolate(output, (full_img.size[1], full_img.size[0]), mode='bilinear')
+        # print("output shape", output.shape)
+        # print("output:", output)
+        output = F.interpolate(output, (full_img.shape[1], full_img.shape[0]), mode='bilinear')
         if net.n_classes > 1:
-            mask = output.argmax(dim=1)
+            probs = torch.softmax(output, dim=1)
+            mask = torch.argmax(probs, dim=1)
         else:
             mask = torch.sigmoid(output) > out_threshold
 
@@ -71,6 +75,8 @@ def get_output_filenames(args):
 
 
 def mask_to_image(mask: np.ndarray, mask_values):
+    print("MASK SHAPE", mask.shape)
+    print("unique mask values:", np.unique(mask_values))
     if isinstance(mask_values[0], list):
         out = np.zeros((mask.shape[-2], mask.shape[-1], len(mask_values[0])), dtype=np.uint8)
     elif mask_values == [0, 1]:
@@ -101,21 +107,26 @@ if __name__ == '__main__':
     logging.info(f'Using device {device}')
 
     net.to(device=device)
-    state_dict = torch.load(args.model, map_location=device)
-    mask_values = state_dict.pop('mask_values', [0, 1])
-    net.load_state_dict(state_dict)
+    # state_dict = torch.load(args.model, map_location=device)
+    # mask_values = state_dict.pop('mask_values', [0, 1])
+    # net.load_state_dict(state_dict)
+    state_dict = torch.load(args.model, map_location=device, weights_only=True)
+    net.load_state_dict(state_dict['model_state_dict'])
+    mask_values = state_dict['mask_values']
 
     logging.info('Model loaded!')
+    logging.info(f'Mask values: {mask_values}')
 
     for i, filename in enumerate(in_files):
         logging.info(f'Predicting image {filename} ...')
-        img = Image.open(filename)
 
         mask = predict_img(net=net,
-                           full_img=img,
-                           scale_factor=args.scale,
+                           filename=filename,
+                           dim=args.img_dim,
                            out_threshold=args.mask_threshold,
                            device=device)
+
+        print('mask', mask)
 
         if not args.no_save:
             out_filename = out_files[i]
