@@ -27,8 +27,8 @@ dir_checkpoint = Path('src/a_unet/checkpoints/')
 def train_model(
         model,
         device,
-        epochs: int = 5,
-        batch_size: int = 1,
+        epochs: int = 50,
+        batch_size: int = 16,
         optimizer: str = 'adam',
         learning_rate: float = 1e-4,
         weight_decay: float = 1e-4,
