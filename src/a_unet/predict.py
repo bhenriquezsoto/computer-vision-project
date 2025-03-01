@@ -41,10 +41,11 @@ def predict_img(net,
         # print("output:", output)
         output = F.interpolate(output, (full_img.shape[0], full_img.shape[1]), mode='bilinear')
         if net.n_classes > 1:
-            probs = torch.softmax(output, dim=1)
-            mask = torch.argmax(probs, dim=1)
+            # probs = torch.softmax(output, dim=1)
+            mask = torch.argmax(output, dim=1)
         else:
             mask = torch.sigmoid(output) > out_threshold
+    print('mask unique values (should be just cast)', np.unique(mask))
 
     return mask[0].long().squeeze().numpy()
 
