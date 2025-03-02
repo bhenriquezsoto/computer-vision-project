@@ -203,7 +203,7 @@ def train_model(
             logging.info(f'Best model saved as {model_path}!')
 
         # Optionally save checkpoint every epoch
-        if save_checkpoint or epoch == epochs:
+        if save_checkpoint or epoch == epochs or epoch == 50:
             checkpoint_path = os.path.join(dir_checkpoint, f'checkpoint_epoch{epoch}.pth')
             state_dict = {"model_state_dict": model.state_dict(), "mask_values": train_set.mask_values}
             torch.save(state_dict, checkpoint_path)
