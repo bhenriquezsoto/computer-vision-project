@@ -55,8 +55,8 @@ def train_model(
 
     # 3. Create data loaders
     loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
-    train_loader = DataLoader(train_set, shuffle=True, batch_size=batch_size **loader_args)
-    val_loader = DataLoader(val_set, shuffle=False, drop_last=True, batch_size=1 **loader_args)
+    train_loader = DataLoader(train_set, shuffle=True, batch_size=batch_size, **loader_args)
+    val_loader = DataLoader(val_set, shuffle=False, drop_last=True, batch_size=1, **loader_args)
 
     # (Initialize logging)
     experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
