@@ -48,8 +48,8 @@ def train_model(
     
     # 2. Create dataset. If augmentation is enabled, tune the augmentation parameters in 'data_loading.py'
 
-    train_set = SegmentationDataset(train_images, train_masks, augmentation=True, dim=img_dim)
-    val_set = SegmentationDataset(val_images, val_masks, augmentation=False, dim=img_dim)
+    train_set = SegmentationDataset(train_images, train_masks, mode='train', dim=img_dim)
+    val_set = SegmentationDataset(val_images, val_masks, mode='valTest', dim=img_dim)
 
     print("Training set dimensions: ", len(train_set))
 
@@ -194,7 +194,7 @@ def train_model(
         logging.info(f"Epoch {epoch} - Validation Dice Score: {val_dice:.4f}, IoU: {val_iou:.4f}, Pixel Acc: {val_acc:.4f}")
 
         # Save the best model based on validation Dice Score
-        if val_iou >= best_val_iou:
+        if val_iou > best_val_iou:
             best_val_iou = val_iou
             run_name = wandb.run.name
             model_path = os.path.join(dir_checkpoint, f'best_model_{run_name}.pth')
@@ -203,7 +203,7 @@ def train_model(
             logging.info(f'Best model saved as {model_path}!')
 
         # Optionally save checkpoint every epoch
-        if save_checkpoint:
+        if save_checkpoint or epoch == epochs:
             checkpoint_path = os.path.join(dir_checkpoint, f'checkpoint_epoch{epoch}.pth')
             state_dict = {"model_state_dict": model.state_dict(), "mask_values": train_set.mask_values}
             torch.save(state_dict, checkpoint_path)
@@ -224,8 +224,9 @@ def train_model(
     # Load test dataset
     test_img_files = list(dir_test_img.glob('*'))
     test_mask_files = list(dir_test_mask.glob('*'))
-    test_dataset = SegmentationDataset(test_img_files, test_mask_files, augmentation=False, dim=img_dim)  # Use same preprocessing as training
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    
+    test_dataset = SegmentationDataset(test_img_files, test_mask_files, mode='valTest', dim=img_dim)  # Use same preprocessing as training
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count(), pin_memory=True)
 
     # Evaluate on the test set
     test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate(model, test_loader, device, amp=amp, desc='Testing round')

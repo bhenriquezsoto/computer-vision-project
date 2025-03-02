@@ -99,7 +99,11 @@ def evaluate(net, dataloader, device, amp, n_classes=3, desc='Validation round')
     with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
         for batch in tqdm(dataloader, total=num_batches, desc=desc, unit='batch', leave=False):        
             image, mask_true = batch['image'], batch['mask']
-
+            
+            # Get image size and resize it to the model's input size
+            original_size = image.shape[-2:]
+            image = F.interpolate(image, size=net.input_size, mode='bilinear')
+        
             # Move to correct device
             image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
             mask_true = mask_true.to(device=device, dtype=torch.long)
@@ -107,6 +111,9 @@ def evaluate(net, dataloader, device, amp, n_classes=3, desc='Validation round')
             # Predict masks
             mask_pred = net(image)
             mask_pred = mask_pred.argmax(dim=1)  # Convert to class indices
+            
+            # Resize masks to original size
+            mask_pred = F.interpolate(mask_pred.unsqueeze(1).float(), size=original_size, mode='nearest').long().squeeze(1)
 
             # Ignore `255` class (void label) in mask
             mask_true = mask_true.clone()

@@ -57,17 +57,34 @@ def unique_mask_values(mask_file):
     else:
         raise ValueError(f'Loaded masks should have 2 or 3 dimensions, found {mask.ndim}')
 
+
+
+def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: int = 256):
+    """Preprocess the image and mask for training.
+    mode 'train' is for training, applying data augmentation and resizing.
+    mode 'valTest' is for validation/testing, applying normalization only.
     
-def preprocessing(img, mask, dim, augmentation=False):
-    """Preprocess the image and mask for training."""
+    Args:
+        img (np.ndarray): Image as NumPy array.
+        mask (np.ndarray): Mask as NumPy array.
+        dim (int): Target image dimension.
+        mode (str): One of 'train', 'valTest'.
+        
+    Returns:
+        Tuple[torch.Tensor]: Processed image and mask as PyTorch tensors.
+    """
+    
+    assert mode in ['train', 'valTest'], f'Invalid mode: {mode}'
+    assert dim > 0, f'Invalid image dimension: {dim}'
+    
     resizing = A.Compose([
         A.LongestMaxSize(max_size=dim, interpolation=0),
         A.PadIfNeeded(min_height=dim, min_width=dim, border_mode=0)
     ])
     normalisation = A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
-    if not augmentation:
+    
+    if mode == 'valTest':
         augmentation = A.Compose([
-            resizing,
             normalisation,
             ToTensorV2()
         ])
@@ -89,10 +106,9 @@ def preprocessing(img, mask, dim, augmentation=False):
             normalisation, 
             ToTensorV2()  # Convert to PyTorch tensor
         ])
+        
     augmented = augmentation(image=img, mask=mask)
     return augmented['image'], augmented['mask']
-
-
 class SegmentationDataset(Dataset):
     """General segmentation dataset for different datasets, supporting transforms and scaling.
 
@@ -103,13 +119,14 @@ class SegmentationDataset(Dataset):
         transform (albumentations.Compose, optional): Data augmentation pipeline. Defaults to None. If none, defaultly resize the image to 256x256 and normalize it.
         scale (float, optional): Scaling factor for resizing. Defaults to None.
     """
-    def __init__(self, images: str, masks: str, mask_suffix: str = '', augmentation: bool = False, dim: int = 256):
+    def __init__(self, images: str, masks: str, mask_suffix: str = '', mode: str = 'train', dim: int = 256):
         assert len(images) == len(masks), "Mismatch between number of images and masks!"
+        assert mode in ['train', 'valTest', 'resize'], f'Invalid mode: {mode}'
 
         self.image_files = sorted(images)
         self.mask_files = sorted(masks)
         self.mask_suffix = mask_suffix
-        self.da = augmentation
+        self.mode = mode
         self.dim = dim
         
         logging.info(f'Creating dataset with {len(self.image_files)} examples')
@@ -140,7 +157,7 @@ class SegmentationDataset(Dataset):
             f'Image and mask {img_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
             
         # Apply the transformations for data augmentation and/or preprocessing
-        img, mask = preprocessing(img, mask, dim=self.dim, augmentation=self.da)
+        img, mask = preprocessing(img, mask, mode='train', dim=self.dim)
         return {
             'image': img,
             'mask': mask
