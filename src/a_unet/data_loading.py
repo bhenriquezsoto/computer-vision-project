@@ -77,13 +77,18 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
     assert mode in ['train', 'valTest'], f'Invalid mode: {mode}'
     assert dim > 0, f'Invalid image dimension: {dim}'
     
+    # Define common transformations for standard resizing and normalization    
     resizing = A.Compose([
         A.LongestMaxSize(max_size=dim, interpolation=0),
         A.PadIfNeeded(min_height=dim, min_width=dim, border_mode=0)
     ])
     normalisation = A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
     
-    original_mask = None
+    # Define transformations for maintaining the original mask dimensions
+    original_mask_agumentation = A.Compose([
+            normalisation,
+            ToTensorV2()
+        ])
     
     if mode == 'valTest':
         augmentation = A.Compose([
@@ -91,13 +96,6 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
             normalisation,
             ToTensorV2()
         ])
-        
-        original_mask_agumentation = A.Compose([
-            normalisation,
-            ToTensorV2()
-        ])
-        
-        _, original_mask = original_mask_agumentation(image=img, mask=mask)['mask']
     else:
         # Define transformations for augmentation
         augmentation = A.Compose([
@@ -118,7 +116,8 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
         ])
         
     augmented = augmentation(image=img, mask=mask)
-    return augmented['image'], augmented['mask'], original_mask
+    original_augmented = original_mask_agumentation(image=img, mask=mask)['mask']
+    return augmented['image'], augmented['mask'], original_augmented['mask']
 class SegmentationDataset(Dataset):
     """General segmentation dataset for different datasets, supporting transforms and scaling.
 
