@@ -83,11 +83,21 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
     ])
     normalisation = A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
     
+    original_mask = None
+    
     if mode == 'valTest':
         augmentation = A.Compose([
+            resizing,
             normalisation,
             ToTensorV2()
         ])
+        
+        original_mask_agumentation = A.Compose([
+            normalisation,
+            ToTensorV2()
+        ])
+        
+        original_mask = original_mask_agumentation(image=None, mask=mask)['mask']
     else:
         # Define transformations for augmentation
         augmentation = A.Compose([
@@ -108,7 +118,7 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
         ])
         
     augmented = augmentation(image=img, mask=mask)
-    return augmented['image'], augmented['mask']
+    return augmented['image'], augmented['mask'], original_mask
 class SegmentationDataset(Dataset):
     """General segmentation dataset for different datasets, supporting transforms and scaling.
 
@@ -158,9 +168,10 @@ class SegmentationDataset(Dataset):
             f'Image and mask {img_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
             
         # Apply the transformations for data augmentation and/or preprocessing
-        img, mask = preprocessing(img, mask, mode=self.mode, dim=self.dim)
+        img, mask, original_mask = preprocessing(img, mask, mode=self.mode, dim=self.dim)
         
         return {
             'image': img,
-            'mask': mask
+            'mask': mask,
+            'original_mask': original_mask
         }
