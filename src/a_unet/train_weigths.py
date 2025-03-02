@@ -93,7 +93,8 @@ def train_model(
 
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)  # or ReduceLROnPlateau(optimizer, mode='max', patience=5)
     grad_scaler = GradScaler(enabled=amp)
-    criterion = nn.CrossEntropyLoss(ignore_index=255) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
+    weight = torch.tensor([1.0, 2.0, 1.0]).to(device)
+    criterion = nn.CrossEntropyLoss(ignore_index=255, weight=weight) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
     best_val_iou = 0
 

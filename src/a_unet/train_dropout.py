@@ -13,7 +13,7 @@ from sklearn.model_selection import train_test_split
 
 import wandb
 from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
-from unet_model import UNet
+from unet_model_dropout import UNet
 from data_loading import SegmentationDataset, TestSegmentationDataset
 
 
@@ -62,7 +62,7 @@ def train_model(
     experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
     experiment.config.update(
         dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, weight_decay=weight_decay,
-             val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim, amp=amp, optimizer=optimizer, dropout=0)
+             val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim, amp=amp, optimizer=optimizer, dropout=0.3)
     )
 
     logging.info(f'''Starting training:
