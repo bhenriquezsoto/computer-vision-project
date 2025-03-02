@@ -112,6 +112,7 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
     original_mask = torch.tensor(mask, dtype=torch.long)
     augmented = augmentation(image=img, mask=mask)
     return augmented['image'], augmented['mask'], original_mask
+
 class SegmentationDataset(Dataset):
     """General segmentation dataset for different datasets, supporting transforms and scaling.
 
@@ -122,14 +123,12 @@ class SegmentationDataset(Dataset):
         transform (albumentations.Compose, optional): Data augmentation pipeline. Defaults to None. If none, defaultly resize the image to 256x256 and normalize it.
         scale (float, optional): Scaling factor for resizing. Defaults to None.
     """
-    def __init__(self, images: str, masks: str, mask_suffix: str = '', mode: str = 'train', dim: int = 256):
+    def __init__(self, images: str, masks: str, mask_suffix: str = '', dim: int = 256):
         assert len(images) == len(masks), "Mismatch between number of images and masks!"
-        assert mode in ['train', 'valTest', 'resize'], f'Invalid mode: {mode}'
 
         self.image_files = sorted(images)
         self.mask_files = sorted(masks)
         self.mask_suffix = mask_suffix
-        self.mode = mode
         self.dim = dim
         
         logging.info(f'Creating dataset with {len(self.image_files)} examples')
@@ -161,10 +160,64 @@ class SegmentationDataset(Dataset):
             f'Image and mask {img_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
             
         # Apply the transformations for data augmentation and/or preprocessing
-        img, mask, original_mask = preprocessing(img, mask, mode=self.mode, dim=self.dim)
+        img, mask, _ = preprocessing(img, mask, mode='train', dim=self.dim)
         
         return {
             'image': img,
-            'mask': mask,
-            'original_mask': original_mask
+            'mask': mask
+        }
+class TestSegmentationDataset(Dataset):
+    """General segmentation dataset for test and validation datasets, keeping the original mask.
+    
+    Args:
+        images_dir (str): Path to images directory.
+        mask_dir (str): Path to mask directory.
+        mask_suffix (str): Suffix used in mask filenames.
+        dim (int): Target image dimension.
+        
+    Returns:
+        Tuple[torch.Tensor]: Processed image and mask as PyTorch tensors.
+    """
+    def __init__(self, images: str, masks: str, mask_suffix: str = '', dim: int = 256):
+        assert len(images) == len(masks), "Mismatch between number of images and masks!"
+
+        self.image_files = sorted(images)
+        self.mask_files = sorted(masks)
+        self.mask_suffix = mask_suffix
+        self.dim = dim
+        
+        logging.info(f'Creating dataset with {len(self.image_files)} examples')
+        logging.info('Scanning mask files to determine unique values')
+
+        # Use `masks` list directly instead of searching a directory
+        with Pool() as p:
+            unique = list(tqdm(
+                p.imap(unique_mask_values, self.mask_files),
+                total=len(self.mask_files)
+            ))
+
+        self.mask_values = list(sorted(np.unique(np.concatenate(unique), axis=0).tolist()))
+        logging.info(f'Unique mask values: {self.mask_values}')
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        img_file = self.image_files[idx]
+        mask_file = self.mask_files[idx]
+        
+        # Load the image and mask in PIL format 
+        mask = load_image(mask_file, is_mask=True)
+        img = load_image(img_file)
+        
+        
+        assert img.shape[:2] == mask.shape[:2], \
+            f'Image and mask {img_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
+            
+        # Apply the transformations for data augmentation and/or preprocessing
+        img, _, original_mask = preprocessing(img, mask, mode='valTest', dim=self.dim)
+        
+        return {
+            'image': img,
+            'mask': original_mask
         }

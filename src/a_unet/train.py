@@ -14,7 +14,7 @@ from sklearn.model_selection import train_test_split
 import wandb
 from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
 from unet_model import UNet
-from data_loading import SegmentationDataset
+from data_loading import SegmentationDataset, TestSegmentationDataset
 
 
 dir_img = Path('Dataset/TrainVal/color')
@@ -48,15 +48,15 @@ def train_model(
     
     # 2. Create dataset. If augmentation is enabled, tune the augmentation parameters in 'data_loading.py'
 
-    train_set = SegmentationDataset(train_images, train_masks, mode='train', dim=img_dim)
-    val_set = SegmentationDataset(val_images, val_masks, mode='valTest', dim=img_dim)
+    train_set = SegmentationDataset(train_images, train_masks, dim=img_dim)
+    val_set = TestSegmentationDataset(val_images, val_masks, dim=img_dim)
 
     print("Training set dimensions: ", len(train_set))
 
     # 3. Create data loaders
-    loader_args = dict(batch_size=batch_size, num_workers=os.cpu_count(), pin_memory=True)
-    train_loader = DataLoader(train_set, shuffle=True, **loader_args)
-    val_loader = DataLoader(val_set, shuffle=False, drop_last=True, **loader_args)
+    loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
+    train_loader = DataLoader(train_set, shuffle=True, batch_size=batch_size **loader_args)
+    val_loader = DataLoader(val_set, shuffle=False, drop_last=True, batch_size=1 **loader_args)
 
     # (Initialize logging)
     experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
@@ -225,8 +225,8 @@ def train_model(
     test_img_files = list(dir_test_img.glob('*'))
     test_mask_files = list(dir_test_mask.glob('*'))
     
-    test_dataset = SegmentationDataset(test_img_files, test_mask_files, mode='valTest', dim=img_dim)  # Use same preprocessing as training
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count(), pin_memory=True)
+    test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)  # Use same preprocessing as training
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
 
     # Evaluate on the test set
     test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate(model, test_loader, device, amp=amp, dim=img_dim, desc='Testing round')
