@@ -98,7 +98,7 @@ def evaluate(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validat
     # iterate over the validation set
     with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
         for batch in tqdm(dataloader, total=num_batches, desc=desc, unit='batch', leave=False):        
-            image, mask_true = batch['image'], batch['original_mask']
+            image, mask_true = batch['image'], batch['mask']
             
             # Get original size from the mask
             original_size = mask_true.shape[-2:]
