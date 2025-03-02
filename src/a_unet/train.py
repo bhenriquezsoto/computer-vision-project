@@ -171,7 +171,7 @@ def train_model(
         logging.info(f"Epoch {epoch} - Training Loss: {epoch_loss:.4f}, Dice Score: {avg_dice.mean().item():.4f}, IoU: {avg_iou.mean().item():.4f}, Pixel Acc: {avg_acc:.4f}")
 
         # Perform validation at the end of each epoch
-        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate(model, val_loader, device, amp, img=img_dim, n_classes=model.n_classes)
+        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate(model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes)
         
         optimizer.step()
         
