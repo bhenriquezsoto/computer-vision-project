@@ -105,6 +105,8 @@ def evaluate(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validat
             original_size = image.shape[-2:]
             print("original size", original_size)
             image = F.interpolate(image, size=(dim,dim), mode='bilinear')
+            
+            print("image shape after interpolation", image.shape)
         
             # Move to correct device
             image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
