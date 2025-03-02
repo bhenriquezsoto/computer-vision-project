@@ -102,8 +102,6 @@ def evaluate(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validat
             
             # Get original size from the mask
             original_size = mask_true.shape[-2:]
-            print("original size", original_size)
-            print("image shape", image.shape)
         
             # Move to correct device
             image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
@@ -112,11 +110,9 @@ def evaluate(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validat
             # Predict masks
             mask_pred = net(image)
             mask_pred = mask_pred.argmax(dim=1)  # Convert to class indices
-            print("mask_pred shape", mask_pred.shape)
             
             # Resize masks to original size
             mask_pred = F.interpolate(mask_pred.unsqueeze(1).float(), size=original_size, mode='nearest').long().squeeze(1)
-            print("mask_pred shape after resize", mask_pred.shape)
 
             # Ignore `255` class (void label) in mask
             mask_true = mask_true.clone()
