@@ -77,7 +77,7 @@ def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float 
 
 
 @torch.inference_mode()
-def evaluate(net, dataloader, device, amp, n_classes=3, desc='Validation round'):
+def evaluate(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validation round'):
     """
     Evaluates model on the validation dataset.
 
@@ -101,8 +101,10 @@ def evaluate(net, dataloader, device, amp, n_classes=3, desc='Validation round')
             image, mask_true = batch['image'], batch['mask']
             
             # Get image size and resize it to the model's input size
+            print("image shape", image.shape)
             original_size = image.shape[-2:]
-            image = F.interpolate(image, size=net.input_size, mode='bilinear')
+            print("original size", original_size)
+            image = F.interpolate(image, size=(dim,dim), mode='bilinear')
         
             # Move to correct device
             image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)

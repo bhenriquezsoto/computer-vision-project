@@ -171,7 +171,7 @@ def train_model(
         logging.info(f"Epoch {epoch} - Training Loss: {epoch_loss:.4f}, Dice Score: {avg_dice.mean().item():.4f}, IoU: {avg_iou.mean().item():.4f}, Pixel Acc: {avg_acc:.4f}")
 
         # Perform validation at the end of each epoch
-        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate(model, val_loader, device, amp, n_classes=model.n_classes)
+        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate(model, val_loader, device, amp, img=img_dim, n_classes=model.n_classes)
         
         optimizer.step()
         
@@ -229,7 +229,7 @@ def train_model(
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=os.cpu_count(), pin_memory=True)
 
     # Evaluate on the test set
-    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate(model, test_loader, device, amp=amp, desc='Testing round')
+    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate(model, test_loader, device, amp=amp, dim=img_dim, desc='Testing round')
 
     # Print test results
     logging.info(f"Test Dice Score (Mean): {test_dice:.4f}")
