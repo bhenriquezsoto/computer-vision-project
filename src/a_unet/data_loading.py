@@ -116,8 +116,8 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
         ])
         
     augmented = augmentation(image=img, mask=mask)
-    original_augmented = original_mask_agumentation(image=img, mask=mask)['mask']
-    return augmented['image'], augmented['mask'], original_augmented['mask']
+    original_mask = original_mask_agumentation(image=img, mask=mask)['mask']
+    return augmented['image'], augmented['mask'], original_mask
 class SegmentationDataset(Dataset):
     """General segmentation dataset for different datasets, supporting transforms and scaling.
 
