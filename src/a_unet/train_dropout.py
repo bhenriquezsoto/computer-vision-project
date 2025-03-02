@@ -96,6 +96,7 @@ def train_model(
     criterion = nn.CrossEntropyLoss(ignore_index=255) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
     best_val_iou = 0
+    best_val_iou_after_epoch_10 = 0
 
     # 5. Begin training
     for epoch in range(1, epochs + 1):
@@ -194,13 +195,22 @@ def train_model(
         logging.info(f"Epoch {epoch} - Validation Dice Score: {val_dice:.4f}, IoU: {val_iou:.4f}, Pixel Acc: {val_acc:.4f}")
 
         # Save the best model based on validation Dice Score
-        if val_iou > best_val_iou:
+        # Save the best model based on validation Dice Score
+        if val_iou > best_val_iou and epoch <= 10:
             best_val_iou = val_iou
             run_name = wandb.run.name
             model_path = os.path.join(dir_checkpoint, f'best_model_{run_name}.pth')
             state_dict = {"model_state_dict": model.state_dict(), "mask_values": train_set.mask_values}
             torch.save(state_dict, model_path)
             logging.info(f'Best model saved as {model_path}!')
+            
+        if epoch > 10 and val_iou > best_val_iou_after_epoch_10:
+            best_val_iou_after_epoch_10 = val_iou
+            run_name = wandb.run.name
+            model_path = os.path.join(dir_checkpoint, f'best_model_after_epoch_10_{run_name}.pth')
+            state_dict = {"model_state_dict": model.state_dict(), "mask_values": train_set.mask_values}
+            torch.save(state_dict, model_path)
+            logging.info(f'Best model after epoch 10 saved as {model_path}!')
 
         # Optionally save checkpoint every epoch
         if save_checkpoint or epoch == epochs or epoch == 50:
