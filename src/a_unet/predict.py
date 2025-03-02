@@ -19,7 +19,7 @@ def plot_img_and_mask(img, mask):
     ax[0].set_title('Input image')
     ax[0].imshow(img)
     for i in range(classes):
-        ax[i + 1].set_title(f'Mask (class {i + 1})')
+        ax[i + 1].set_title(f'Mask (class {i})')
         ax[i + 1].imshow(mask == i)
     plt.xticks([]), plt.yticks([])
     plt.show()
@@ -108,9 +108,6 @@ if __name__ == '__main__':
     logging.info(f'Using device {device}')
 
     net.to(device=device)
-    # state_dict = torch.load(args.model, map_location=device)
-    # mask_values = state_dict.pop('mask_values', [0, 1])
-    # net.load_state_dict(state_dict)
     state_dict = torch.load(args.model, map_location=device, weights_only=True)
     net.load_state_dict(state_dict['model_state_dict'])
     mask_values = state_dict['mask_values']
@@ -126,8 +123,6 @@ if __name__ == '__main__':
                            dim=args.img_dim,
                            out_threshold=args.mask_threshold,
                            device=device)
-
-        print('mask', mask)
 
         if not args.no_save:
             out_filename = out_files[i]
