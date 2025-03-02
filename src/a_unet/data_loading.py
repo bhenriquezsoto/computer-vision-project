@@ -153,7 +153,6 @@ class SegmentationDataset(Dataset):
         mask = load_image(mask_file, is_mask=True)
         img = load_image(img_file)
         
-        print("img shape before preprocessing with mode {} and dim {}:".format(self.mode, self.dim), img.shape)
         
         assert img.shape[:2] == mask.shape[:2], \
             f'Image and mask {img_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
@@ -161,7 +160,6 @@ class SegmentationDataset(Dataset):
         # Apply the transformations for data augmentation and/or preprocessing
         img, mask = preprocessing(img, mask, mode=self.mode, dim=self.dim)
         
-        print("img shape after preprocessing with mode {} and dim {}:".format(self.mode, self.dim), img.shape)
         return {
             'image': img,
             'mask': mask
