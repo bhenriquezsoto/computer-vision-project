@@ -97,7 +97,7 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
             ToTensorV2()
         ])
         
-        original_mask = original_mask_agumentation(image=None, mask=mask)['mask']
+        _, original_mask = original_mask_agumentation(image=img, mask=mask)['mask']
     else:
         # Define transformations for augmentation
         augmentation = A.Compose([
