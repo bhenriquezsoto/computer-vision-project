@@ -159,7 +159,7 @@ class SegmentationDataset(Dataset):
             f'Image and mask {img_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
             
         # Apply the transformations for data augmentation and/or preprocessing
-        img, mask = preprocessing(img, mask, mode='train', dim=self.dim)
+        img, mask = preprocessing(img, mask, mode=self.mode, dim=self.dim)
         
         print("img shape after preprocessing with mode {} and dim {}:".format(self.mode, self.dim), img.shape)
         return {
