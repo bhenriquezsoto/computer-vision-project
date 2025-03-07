@@ -123,8 +123,9 @@ def train_model(
             for batch in train_loader:
                 images, true_masks = batch['image'], batch['mask']
 
-                assert images.shape[1] == model.n_channels, \
-                    f'Network has {model.n_channels} input channels, but got {images.shape[1]}.'
+                if model.__class__.__name__ == 'UNet':
+                    assert images.shape[1] == model.n_channels, \
+                        f'Network has {model.n_channels} input channels, but got {images.shape[1]}.'
 
                 images = images.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
                 true_masks = true_masks.to(device=device, dtype=torch.long)
