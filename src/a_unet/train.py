@@ -313,7 +313,7 @@ if __name__ == '__main__':
     
     if args.model == 'clip':
         logging.info(f'Network:\n'
-                     f'\t{model.n_classes} output channels (classes)\n'
+                     f'\t{model.n_classes} output channels (classes)\n')
     else:
         logging.info(f'Network:\n'
                     f'\t{model.n_channels} input channels\n'
