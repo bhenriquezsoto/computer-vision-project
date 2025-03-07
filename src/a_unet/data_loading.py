@@ -117,13 +117,13 @@ class SegmentationDataset(Dataset):
     """General segmentation dataset for different datasets, supporting transforms and scaling.
 
     Args:
-        images_dir (str): Path to images directory.
-        mask_dir (str): Path to mask directory.
+        images_dir (list[str]): List of image filenames.
+        mask_dir (list[str]): List of mask filenames.
         mask_suffix (str): Suffix used in mask filenames.
         transform (albumentations.Compose, optional): Data augmentation pipeline. Defaults to None. If none, defaultly resize the image to 256x256 and normalize it.
         scale (float, optional): Scaling factor for resizing. Defaults to None.
     """
-    def __init__(self, images: str, masks: str, mask_suffix: str = '', dim: int = 256):
+    def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', dim: int = 256)
         assert len(images) == len(masks), "Mismatch between number of images and masks!"
 
         self.image_files = sorted(images)
@@ -170,15 +170,15 @@ class TestSegmentationDataset(Dataset):
     """General segmentation dataset for test and validation datasets, keeping the original mask.
     
     Args:
-        images_dir (str): Path to images directory.
-        mask_dir (str): Path to mask directory.
+        images_dir (list[str]): List of image filenames.
+        mask_dir (list[str]): List of mask filenames.
         mask_suffix (str): Suffix used in mask filenames.
         dim (int): Target image dimension.
         
     Returns:
         Tuple[torch.Tensor]: Processed image and mask as PyTorch tensors.
     """
-    def __init__(self, images: str, masks: str, mask_suffix: str = '', dim: int = 256):
+    def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', dim: int = 256):
         assert len(images) == len(masks), "Mismatch between number of images and masks!"
 
         self.image_files = sorted(images)
