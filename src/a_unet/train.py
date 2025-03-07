@@ -185,8 +185,6 @@ def train_model(
         # Perform validation at the end of each epoch
         val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate(model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes)
         
-        optimizer.step()
-        
         # Update scheduler (if using ReduceLROnPlateau)
         if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
             scheduler.step(val_iou)
