@@ -94,7 +94,9 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
         # Define transformations for augmentation
         augmentation = A.Compose([
             resizing,
+            
             #### ADD AUGMENTATION HERE ####
+            
             # A.RandomCrop(img_dim, img_dim),  # Crop to fixed size
             A.HorizontalFlip(p=0.5),  # Flip images & masks with 50% probability
             A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
@@ -104,7 +106,9 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
             # A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
             # A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
             # A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
+            
             ### END AUGMENTATION ###
+            
             normalisation, 
             ToTensorV2()  # Convert to PyTorch tensor
         ])
