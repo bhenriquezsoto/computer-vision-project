@@ -14,8 +14,8 @@ from sklearn.model_selection import train_test_split
 import wandb
 from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
 from unet_model import UNet
+from clip_model import CLIPSegmentationModel
 from data_loading import SegmentationDataset, TestSegmentationDataset
-
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
@@ -23,6 +23,16 @@ dir_test_img = Path('Dataset/Test/color')
 dir_test_mask = Path('Dataset/Test/label')
 dir_checkpoint = Path('src/a_unet/checkpoints/')
 
+def get_model(args):
+    if args.model == 'unet':
+        model = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+    elif args.model == 'clip':
+        model = CLIPSegmentationModel(n_classes=args.classes)
+    else:
+        raise ValueError(f"Unsupported model: {args.model}")
+    
+    model = model.to(memory_format=torch.channels_last)
+    return model
 
 def train_model(
         model,
@@ -62,10 +72,11 @@ def train_model(
     experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
     experiment.config.update(
         dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, weight_decay=weight_decay,
-             val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim, amp=amp, optimizer=optimizer, dropout=0)
+             val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim, model=model.__class__.__name__, amp=amp, optimizer=optimizer, dropout=0)
     )
 
     logging.info(f'''Starting training:
+        Model:           {model.__class__.__name__} 
         Epochs:          {epochs}
         Batch size:      {batch_size}
         Learning rate:   {learning_rate}
@@ -203,6 +214,7 @@ def train_model(
             torch.save(state_dict, model_path)
             logging.info(f'Best model saved as {model_path}!')
             
+        # Save the best model based on validation IoU after epoch 10 to avoid only saving early peaks
         if epoch > 10 and val_iou > best_val_iou_after_epoch_10:
             best_val_iou_after_epoch_10 = val_iou
             run_name = wandb.run.name
@@ -283,6 +295,7 @@ def get_args():
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
+    parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip'], default='unet', help='Choose model (unet or clip)')
 
     return parser.parse_args()
 
@@ -294,11 +307,9 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Using device {device}')
 
-    # Change here to adapt to your data
     # n_channels=3 for RGB images
     # n_classes is the number of probabilities you want to get per pixel
-    model = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
-    model = model.to(memory_format=torch.channels_last) # Tells PyTorch to store tensors in a format optimized for GPU efficiency
+    model = get_model(args)
 
     logging.info(f'Network:\n'
                  f'\t{model.n_channels} input channels\n'
