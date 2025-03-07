@@ -310,11 +310,16 @@ if __name__ == '__main__':
     # n_channels=3 for RGB images
     # n_classes is the number of probabilities you want to get per pixel
     model = get_model(args)
-
-    logging.info(f'Network:\n'
-                 f'\t{model.n_channels} input channels\n'
-                 f'\t{model.n_classes} output channels (classes)\n'
-                 f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
+    
+    if args.model == 'clip':
+        logging.info(f'Network:\n'
+                     f'\t{model.n_classes} output channels (classes)\n'
+                     f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
+    else:
+        logging.info(f'Network:\n'
+                    f'\t{model.n_channels} input channels\n'
+                    f'\t{model.n_classes} output channels (classes)\n'
+                    f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
 
     if args.load:
         state_dict = torch.load(args.load, map_location=device, weights_only=True)
