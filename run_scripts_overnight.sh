@@ -12,6 +12,7 @@ run_experiment() {
 }
 
 # Base training commands
+python clear_cache.py
 run_experiment "python src/a_unet/train.py -b 16 -e 50 -s 224 -m clip --amp"
 python clear_cache.py
 run_experiment "python src/a_unet/train.py -b 32 -e 100 --amp"
