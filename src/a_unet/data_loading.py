@@ -127,7 +127,7 @@ class SegmentationDataset(Dataset):
         transform (albumentations.Compose, optional): Data augmentation pipeline. Defaults to None. If none, defaultly resize the image to 256x256 and normalize it.
         scale (float, optional): Scaling factor for resizing. Defaults to None.
     """
-    def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', dim: int = 256)
+    def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', dim: int = 256):
         assert len(images) == len(masks), "Mismatch between number of images and masks!"
 
         self.image_files = sorted(images)
