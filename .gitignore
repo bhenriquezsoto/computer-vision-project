@@ -5,5 +5,8 @@ Computer Vision Mini Project.pdf
 Dataset/
 Dataset_resized_masks/
 Dataset_resized/
-DatasetOriginal
+DatasetOriginal/
+Dataset2/
+Computer Vision Mini-Project.pdf
+wandb/
 src/weights/
