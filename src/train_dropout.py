@@ -13,7 +13,7 @@ from sklearn.model_selection import train_test_split
 
 import wandb
 from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
-from unet_model import UNet
+from a_unet.unet_model_dropout import UNet
 from data_loading import SegmentationDataset, TestSegmentationDataset
 
 
@@ -62,7 +62,7 @@ def train_model(
     experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
     experiment.config.update(
         dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, weight_decay=weight_decay,
-             val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim, amp=amp, optimizer=optimizer, dropout=0)
+             val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim, amp=amp, optimizer=optimizer, dropout=0.3)
     )
 
     logging.info(f'''Starting training:
@@ -93,8 +93,7 @@ def train_model(
 
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)  # or ReduceLROnPlateau(optimizer, mode='max', patience=5)
     grad_scaler = GradScaler(enabled=amp)
-    weight = torch.tensor([1.0, 2.0, 1.0]).to(device)
-    criterion = nn.CrossEntropyLoss(ignore_index=255, weight=weight) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
+    criterion = nn.CrossEntropyLoss(ignore_index=255) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
     best_val_iou = 0
     best_val_iou_after_epoch_10 = 0
@@ -195,6 +194,7 @@ def train_model(
 
         logging.info(f"Epoch {epoch} - Validation Dice Score: {val_dice:.4f}, IoU: {val_iou:.4f}, Pixel Acc: {val_acc:.4f}")
 
+        # Save the best model based on validation Dice Score
         # Save the best model based on validation Dice Score
         if val_iou > best_val_iou and epoch <= 10:
             best_val_iou = val_iou

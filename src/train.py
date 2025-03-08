@@ -13,8 +13,8 @@ from sklearn.model_selection import train_test_split
 
 import wandb
 from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
-from unet_model import UNet
-from clip_model import CLIPSegmentationModel
+from a_unet.unet_model import UNet 
+from clip.clip_model import CLIPSegmentationModel
 from data_loading import SegmentationDataset, TestSegmentationDataset
 
 dir_img = Path('Dataset/TrainVal/color')
