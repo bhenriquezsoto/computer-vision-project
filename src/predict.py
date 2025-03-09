@@ -9,7 +9,9 @@ from PIL import Image
 from torchvision import transforms
 
 from data_loading import SegmentationDataset, load_image, preprocessing
-from a_unet.unet_model import UNet
+from models.unet_model import UNet
+from models.clip_model import CLIPSegmentationModel
+from models.autoencoder_model import Autoencoder
 
 import matplotlib.pyplot as plt
 
@@ -30,6 +32,11 @@ def predict_img(net,
                 dim=256,
                 out_threshold=0.5):
     net.eval()
+    
+    # If model is Autoencoder, make sure we're in segmentation phase
+    if isinstance(net, Autoencoder):
+        net.set_phase("segmentation")
+    
     full_img = load_image(filename)
     img, _ = preprocessing(img=full_img, mask=None, dim=dim)
     img = img.unsqueeze(0)

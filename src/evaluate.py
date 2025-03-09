@@ -90,6 +90,14 @@ def evaluate(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validat
     """
     net.eval()
     num_batches = len(dataloader)
+    
+    # Check if we're evaluating an autoencoder in reconstruction phase
+    is_autoencoder_reconstruction = hasattr(net, 'training_phase') and net.training_phase == 'reconstruction'
+    
+    # If we're in reconstruction phase, return dummy metrics and skip evaluation
+    if is_autoencoder_reconstruction:
+        dummy_metrics = torch.zeros(n_classes, device=device)
+        return 0.0, 0.0, 0.0, dummy_metrics, dummy_metrics
 
     total_dice = torch.zeros(n_classes, device=device)
     total_iou = torch.zeros(n_classes, device=device)
