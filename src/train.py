@@ -16,7 +16,7 @@ from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, co
 from models.unet_model import UNet 
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
-from data_loading import SegmentationDataset, TestSegmentationDataset
+from data_loading import SegmentationDataset, TestSegmentationDataset, sort_and_match_files
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
@@ -58,20 +58,8 @@ def train_model(
     all_images = list(dir_img.glob('*'))
     all_masks = list(dir_mask.glob('*'))
     
-    # Match images and masks by their base names first
-    image_dict = {Path(img).stem: img for img in all_images}
-    mask_dict = {Path(mask).stem: mask for mask in all_masks}
-    
-    # Find common base names
-    common_names = sorted(set(image_dict.keys()) & set(mask_dict.keys()))
-    if len(common_names) < min(len(all_images), len(all_masks)):
-        logging.warning(f'Only {len(common_names)} out of {min(len(all_images), len(all_masks))} image-mask pairs matched by name!')
-        logging.warning(f'Example image names: {list(image_dict.keys())[:5]}')
-        logging.warning(f'Example mask names: {list(mask_dict.keys())[:5]}')
-    
-    # Create paired lists of matched files
-    matched_images = [image_dict[name] for name in common_names]
-    matched_masks = [mask_dict[name] for name in common_names]
+    # Match images and masks by their base names using the new helper function
+    matched_images, matched_masks = sort_and_match_files(all_images, all_masks)
     
     # Now split the matched pairs
     train_indices, val_indices = train_test_split(range(len(matched_images)), test_size=val_percent, random_state=42)
@@ -310,6 +298,9 @@ def train_model(
     # Load test dataset
     test_img_files = list(dir_test_img.glob('*'))
     test_mask_files = list(dir_test_mask.glob('*'))
+    
+    # Sort and match test images and masks using the same function
+    test_img_files, test_mask_files = sort_and_match_files(test_img_files, test_mask_files)
     
     test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)  # Use same preprocessing as training
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
