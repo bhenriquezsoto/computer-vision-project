@@ -1,6 +1,6 @@
 # computer-vision-project
 
-This repository contains the 2024/25 project version of the Computer Vision course at the University of Edinburgh
+This repository contains the 2024/25 project version of the Computer Vision course at the University of Edinburgh. The main topic in this case is segmentation.
 
 ## Authors
 - [Julia Lopez Gomez](https://github.com/julialopezgomez)
