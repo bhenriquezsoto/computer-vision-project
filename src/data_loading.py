@@ -130,8 +130,10 @@ class SegmentationDataset(Dataset):
     def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', dim: int = 256):
         assert len(images) == len(masks), "Mismatch between number of images and masks!"
 
-        self.image_files = sorted(images)
-        self.mask_files = sorted(masks)
+        # Store the files directly, assuming they are already matched
+        self.image_files = images
+        self.mask_files = masks
+        
         self.mask_suffix = mask_suffix
         self.dim = dim
         
@@ -161,7 +163,7 @@ class SegmentationDataset(Dataset):
         
         
         assert img.shape[:2] == mask.shape[:2], \
-            f'Image and mask {img_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
+            f'Image and mask {img_file}, {mask_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
             
         # Apply the transformations for data augmentation and/or preprocessing
         img, mask, _ = preprocessing(img, mask, mode='train', dim=self.dim)
@@ -170,9 +172,10 @@ class SegmentationDataset(Dataset):
             'image': img,
             'mask': mask
         }
+
 class TestSegmentationDataset(Dataset):
     """General segmentation dataset for test and validation datasets, keeping the original mask.
-    
+
     Args:
         images_dir (list[str]): List of image filenames.
         mask_dir (list[str]): List of mask filenames.
@@ -185,8 +188,10 @@ class TestSegmentationDataset(Dataset):
     def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', dim: int = 256):
         assert len(images) == len(masks), "Mismatch between number of images and masks!"
 
-        self.image_files = sorted(images)
-        self.mask_files = sorted(masks)
+        # Store the files directly, assuming they are already matched
+        self.image_files = images
+        self.mask_files = masks
+        
         self.mask_suffix = mask_suffix
         self.dim = dim
         

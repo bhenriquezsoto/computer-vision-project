@@ -51,20 +51,42 @@ def train_model(
         amp: bool = False,
         gradient_clipping: float = 1.0
 ):
-    # 1. Split into train / validation partitions
+    # Create checkpoint directory at the beginning to avoid repeated checks
+    os.makedirs(dir_checkpoint, exist_ok=True)
+    
+    # 1. Get all image and mask files
     all_images = list(dir_img.glob('*'))
     all_masks = list(dir_mask.glob('*'))
     
+    # Match images and masks by their base names first
+    image_dict = {Path(img).stem: img for img in all_images}
+    mask_dict = {Path(mask).stem: mask for mask in all_masks}
     
-    train_images, val_images, train_masks, val_masks = train_test_split(all_images, all_masks, test_size=val_percent, random_state=42)
+    # Find common base names
+    common_names = sorted(set(image_dict.keys()) & set(mask_dict.keys()))
+    if len(common_names) < min(len(all_images), len(all_masks)):
+        logging.warning(f'Only {len(common_names)} out of {min(len(all_images), len(all_masks))} image-mask pairs matched by name!')
+        logging.warning(f'Example image names: {list(image_dict.keys())[:5]}')
+        logging.warning(f'Example mask names: {list(mask_dict.keys())[:5]}')
     
+    # Create paired lists of matched files
+    matched_images = [image_dict[name] for name in common_names]
+    matched_masks = [mask_dict[name] for name in common_names]
+    
+    # Now split the matched pairs
+    train_indices, val_indices = train_test_split(range(len(matched_images)), test_size=val_percent, random_state=42)
+    
+    train_images = [matched_images[i] for i in train_indices]
+    train_masks = [matched_masks[i] for i in train_indices]
+    val_images = [matched_images[i] for i in val_indices]
+    val_masks = [matched_masks[i] for i in val_indices]
     
     # 2. Create dataset. If augmentation is enabled, tune the augmentation parameters in 'data_loading.py'
-
     train_set = SegmentationDataset(train_images, train_masks, dim=img_dim)
     val_set = TestSegmentationDataset(val_images, val_masks, dim=img_dim)
-
+    
     print("Training set dimensions: ", len(train_set))
+    print("Validation set dimensions: ", len(val_set))
 
     # 3. Create data loaders
     loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
