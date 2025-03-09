@@ -243,6 +243,7 @@ def sort_and_match_files(images, masks):
         matched_images: List of matched and sorted image file paths
         matched_masks: List of matched and sorted mask file paths
     """
+    print("Sorting and matching files...")
     # Create dictionaries with base names as keys
     image_dict = {Path(img).stem: img for img in images}
     mask_dict = {Path(mask).stem: mask for mask in masks}
