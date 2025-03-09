@@ -14,8 +14,16 @@ from models.unet.unet_model import UNet
 from models.clip.clip_model import CLIPSegmentationModel
 from models.autoencoder.auto_encoder_model import AutoencoderSegmentation
 
-# Import trainer classes (will be lazily loaded by model.trainer_class)
-# No need to import them directly here
+# Import trainer classes
+from models.unet.unet_trainer import UNetTrainer
+from models.clip.clip_trainer import CLIPTrainer
+from models.autoencoder.autoencoder_trainer import AutoencoderTrainer
+from models.base.registry import _MODEL_TRAINER_REGISTRY, register_model_trainer
+
+# Manually register trainers
+_MODEL_TRAINER_REGISTRY['UNet'] = UNetTrainer
+_MODEL_TRAINER_REGISTRY['CLIPSegmentationModel'] = CLIPTrainer
+_MODEL_TRAINER_REGISTRY['AutoencoderSegmentation'] = AutoencoderTrainer
 
 # Global constants
 CHECKPOINT_DIR = Path('src/models/checkpoints')
@@ -195,8 +203,11 @@ def main():
         model = get_model(args)
         
         # Get the appropriate trainer for this model
-        from models.base.registry import get_trainer_for_model
-        trainer_class = get_trainer_for_model(model.__class__.__name__)
+        from models.base.registry import get_trainer_for_model, _MODEL_TRAINER_REGISTRY
+        logging.info(f"Registry state at import: {list(_MODEL_TRAINER_REGISTRY.keys())}")
+        model_class_name = model.__class__.__name__
+        logging.info(f"Looking up trainer for model class: {model_class_name}")
+        trainer_class = get_trainer_for_model(model_class_name)
         
         # Create directory for model checkpoints
         checkpoint_dir = CHECKPOINT_DIR / args.model
@@ -215,10 +226,13 @@ def main():
             'use_wandb': not args.no_wandb
         }
         
-        # Add model-specific parameters if available
+        # Note: We don't need to explicitly add 'bilinear' to trainer_params
+        # because UNetTrainer gets it from the args object using getattr(args, 'bilinear', False)
+        
+        # Add model-specific parameters if available - but skip 'bilinear' which is handled specially
         model_info = MODEL_PARAMS.get(args.model, {})
         for param in model_info.get('specialized_params', []):
-            if hasattr(args, param):
+            if param != 'bilinear' and hasattr(args, param):
                 trainer_params[param] = getattr(args, param)
         
         # Create trainer

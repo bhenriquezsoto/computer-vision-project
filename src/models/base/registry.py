@@ -90,6 +90,9 @@ def get_trainer_for_model(model_class_name: str) -> Type:
     # Lazily import to avoid circular dependencies
     from models.base.trainer import BaseTrainer
     
+    # Debug: Print registered trainers
+    logging.info(f"Registered trainers: {list(_MODEL_TRAINER_REGISTRY.keys())}")
+    
     if model_class_name not in _MODEL_TRAINER_REGISTRY:
         logging.warning(f"No trainer registered for model {model_class_name}. Using BaseTrainer.")
         return BaseTrainer
