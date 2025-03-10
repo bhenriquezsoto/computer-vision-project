@@ -44,6 +44,7 @@ def train_model(
         epochs: int = 50,
         batch_size: int = 16,
         optimizer: str = 'adam',
+        class_weights: torch.Tensor = None,
         learning_rate: float = 1e-4,
         weight_decay: float = 1e-4,
         val_percent: float = 0.1,
@@ -118,7 +119,7 @@ def train_model(
 
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)  # or ReduceLROnPlateau(optimizer, mode='max', patience=5)
     grad_scaler = GradScaler(enabled=amp)
-    criterion = nn.CrossEntropyLoss(ignore_index=255) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
+    criterion = nn.CrossEntropyLoss(ignore_index=255, weights = class_weights) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
     best_val_iou = 0
     best_val_iou_after_epoch_10 = 0
@@ -342,6 +343,7 @@ def get_args():
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
     parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip', 'autoencoder'], default='unet', help='Choose model (unet or clip)')
+    parser.add_argument('--class-weights', '-cw', type=float, nargs='+', default=None, help='Class weights, space-separated (e.g., -cw 0.1 0.8 0.6)')
 
     return parser.parse_args()
 
@@ -376,6 +378,15 @@ if __name__ == '__main__':
         state_dict = torch.load(args.load, map_location=device, weights_only=True)
         model.load_state_dict(state_dict['model_state_dict'])
         logging.info(f'Model loaded from {args.load}')
+        
+    # Set class weights
+    if args.class_weights is not None:
+        assert len(args.class_weights) == args.classes, \
+            'Number of class weights must match number of classes. Expected: {} but got: {}'.format(args.classes, len(args.class_weights))
+        class_weights = torch.tensor(args.class_weights, dtype=torch.float32).to(device)
+    else:
+        class_weights = None
+
 
     model.to(device=device)
     try:
@@ -386,6 +397,7 @@ if __name__ == '__main__':
             learning_rate=args.lr,
             weight_decay=args.weight_decay,
             optimizer=args.optimizer,
+            class_weights=class_weights,
             device=device,
             img_dim=args.img_dim,
             val_percent=args.val / 100,
