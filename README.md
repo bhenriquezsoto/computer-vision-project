@@ -33,6 +33,6 @@ The parameters were the following:
 - Epochs: 100 (50 for the reconstruction phase and 50 for the segmentation phase)
 - Initial learning-rate: 0.001
 
-Can be tested with `python ./src/train.py -e 100 --model autoencoder --amp --batch-size 128`
+Can be tested with `python src/train.py -e 100 --model autoencoder --amp --batch-size 128`
 
 ### Prompt-based Segmentation
