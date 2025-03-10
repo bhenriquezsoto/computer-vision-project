@@ -1,5 +1,6 @@
 {
     "python.poetryPath": "poetry",
     "python.defaultInterpreterPath": "/Users/bhenriquezsoto/Library/Caches/pypoetry/virtualenvs/project-rh8Wj0kb-py3.11/bin/python",
-    "editor.formatOnSave": true
+    "editor.formatOnSave": true,
+    "python.terminal.activateEnvironment": true
 }
