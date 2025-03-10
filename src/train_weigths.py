@@ -12,7 +12,7 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
 import wandb
-from metrics import compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
+from metrics import compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss, compute_metrics
 from models.unet_model import UNet
 from data_loading import SegmentationDataset, TestSegmentationDataset
 
@@ -173,7 +173,7 @@ def train_model(
         logging.info(f"Epoch {epoch} - Training Loss: {epoch_loss:.4f}, Dice Score: {avg_dice.mean().item():.4f}, IoU: {avg_iou.mean().item():.4f}, Pixel Acc: {avg_acc:.4f}")
 
         # Perform validation at the end of each epoch
-        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate(model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes)
+        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes)
         
         optimizer.step()
         
@@ -239,7 +239,7 @@ def train_model(
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
 
     # Evaluate on the test set
-    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate(model, test_loader, device, amp=amp, dim=img_dim, desc='Testing round')
+    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = compute_metrics(model, test_loader, device, amp=amp, dim=img_dim, n_classes=model.n_classes)
 
     # Print test results
     logging.info(f"Test Dice Score (Mean): {test_dice:.4f}")
