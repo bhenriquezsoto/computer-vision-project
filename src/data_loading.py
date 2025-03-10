@@ -113,7 +113,7 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
             ToTensorV2()  # Convert to PyTorch tensor
         ])
         
-    original_mask = torch.tensor(mask, dtype=torch.long)
+    original_mask = torch.tensor(mask, dtype=torch.long) if mask is not None else None
     augmented = augmentation(image=img, mask=mask)
     return augmented['image'], augmented['mask'], original_mask
 
@@ -224,4 +224,34 @@ class TestSegmentationDataset(Dataset):
         return {
             'image': img,
             'mask': original_mask
+        }
+        
+class AutoencoderDataset(Dataset):
+    """General autoencoder dataset for different datasets, supporting transforms and scaling.
+
+    Args:
+        images_dir (list[str]): List of image filenames.
+        transform (albumentations.Compose, optional): Data augmentation pipeline. Defaults to None. If none, defaultly resize the image to 256x256 and normalize it.
+        scale (float, optional): Scaling factor for resizing. Defaults to None.
+    """
+    def __init__(self, images: list[str], dim: int = 256):
+        self.image_files = sorted(images)
+        self.dim = dim
+        
+        logging.info(f'Creating dataset with {len(self.image_files)} examples')
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        img_file = self.image_files[idx]
+        
+        # Load the image and mask in PIL format 
+        img = load_image(img_file)
+            
+        # Apply the transformations for data augmentation and/or preprocessing
+        img, _, _ = preprocessing(img, None, mode='train', dim=self.dim)
+        
+        return {
+            'image': img,
         }

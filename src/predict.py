@@ -9,7 +9,7 @@ from PIL import Image
 from torchvision import transforms
 
 from data_loading import SegmentationDataset, load_image, preprocessing
-from unet_model import UNet
+from models.unet.unet_model import UNet
 
 import matplotlib.pyplot as plt
 

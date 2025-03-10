@@ -1,4 +1,4 @@
-
+#TODO: Implement testing function
 
 def test_model(net, dataloather, device, amp, n_classes=3, desc='Testing round'):
     """
