@@ -416,6 +416,7 @@ if __name__ == '__main__':
             learning_rate=args.lr,
             weight_decay=args.weight_decay,
             optimizer=args.optimizer,
+            class_weights=class_weights,
             device=device,
             img_dim=args.img_dim,
             val_percent=args.val / 100,
