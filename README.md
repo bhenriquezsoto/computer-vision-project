@@ -10,7 +10,28 @@ This repository contains the 2024/25 project version of the Computer Vision cour
 
 ### UNet
 
+#### General results
+- Mean Dice Score: 0.7475
+- Mean IoU: 0.6805
+- Pixel Accuracy: 0.8740
+
+#### Results by class
+- Class 0 - Dice: 0.9083, IoU: 0.8403
+- Class 1 - Dice: 0.7200, IoU: 0.6779
+- Class 2 - Dice: 0.6142, IoU: 0.5234
+
 ### CLIP
+
+#### General results
+
+- Mean Dice Score: 0.6118                                                               
+- Mean IoU: 0.5738
+- Pixel Accuracy: 0.7169
+
+#### Results by class
+- Class 0 - Dice: 0.7792, IoU: 0.6754
+- Class 1 - Dice: 0.6920, IoU: 0.6889
+- Class 2 - Dice: 0.3642, IoU: 0.3571
 
 ### Auto-Encoder Approach
 In here we obtain the following results in the test set:
