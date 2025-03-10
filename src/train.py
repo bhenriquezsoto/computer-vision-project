@@ -5,29 +5,33 @@ from pathlib import Path
 import torch
 from torch import optim
 from torch import nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from torch.amp import GradScaler
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
 import wandb
-from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
-from a_unet.unet_model import UNet 
-from clip.clip_model import CLIPSegmentationModel
-from data_loading import SegmentationDataset, TestSegmentationDataset
+from metrics import compute_metrics, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
+from test import evaluate_model
+from models.unet_model import UNet 
+from models.clip_model import CLIPSegmentationModel
+from models.autoencoder_model import Autoencoder
+from data_loading import SegmentationDataset, TestSegmentationDataset, sort_and_match_files
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
 dir_test_img = Path('Dataset/Test/color')
 dir_test_mask = Path('Dataset/Test/label')
-dir_checkpoint = Path('src/a_unet/checkpoints/')
+dir_checkpoint = Path('src/models/checkpoints/')
 
 def get_model(args):
     if args.model == 'unet':
         model = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
     elif args.model == 'clip':
         model = CLIPSegmentationModel(n_classes=args.classes)
+    elif args.model == 'autoencoder':
+        model = Autoencoder(n_channels=3, n_classes=args.classes)
     else:
         raise ValueError(f"Unsupported model: {args.model}")
     
@@ -48,20 +52,30 @@ def train_model(
         amp: bool = False,
         gradient_clipping: float = 1.0
 ):
-    # 1. Split into train / validation partitions
+    # Create checkpoint directory at the beginning to avoid repeated checks
+    os.makedirs(dir_checkpoint, exist_ok=True)
+    
+    # 1. Get all image and mask files
     all_images = list(dir_img.glob('*'))
     all_masks = list(dir_mask.glob('*'))
     
+    # Match images and masks by their base names using the new helper function
+    matched_images, matched_masks = sort_and_match_files(all_images, all_masks)
     
-    train_images, val_images, train_masks, val_masks = train_test_split(all_images, all_masks, test_size=val_percent, random_state=42)
+    # Now split the matched pairs
+    train_indices, val_indices = train_test_split(range(len(matched_images)), test_size=val_percent, random_state=42)
     
+    train_images = [matched_images[i] for i in train_indices]
+    train_masks = [matched_masks[i] for i in train_indices]
+    val_images = [matched_images[i] for i in val_indices]
+    val_masks = [matched_masks[i] for i in val_indices]
     
     # 2. Create dataset. If augmentation is enabled, tune the augmentation parameters in 'data_loading.py'
-
     train_set = SegmentationDataset(train_images, train_masks, dim=img_dim)
     val_set = TestSegmentationDataset(val_images, val_masks, dim=img_dim)
-
+    
     print("Training set dimensions: ", len(train_set))
+    print("Validation set dimensions: ", len(val_set))
 
     # 3. Create data loaders
     loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
@@ -130,15 +144,39 @@ def train_model(
                 true_masks = true_masks.to(device=device, dtype=torch.long)
 
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
-                    masks_pred = model(images)
-                    if model.n_classes == 1:
-                        loss = criterion(masks_pred.squeeze(1), true_masks.float())
-                        loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
+                    # Special handling for autoencoder model with two-phase training
+                    if isinstance(model, Autoencoder):
+                        # Phase 1: Reconstruction training (first half of epochs)
+                        if epoch <= epochs // 2:
+                            model.set_phase("reconstruction")
+                            masks_pred = model(images)
+                            # Reconstruction loss (MSE between input and output)
+                            loss = nn.MSELoss()(masks_pred, images)
+                        # Phase 2: Segmentation training (second half of epochs)
+                        else:
+                            # If this is the first epoch of segmentation phase, load pretrained encoder
+                            if epoch == epochs // 2 + 1:
+                                logging.info("Switching to segmentation phase, using pretrained encoder")
+                                # Use current model state for encoder weights
+                                model.set_phase("segmentation")
+                            
+                            masks_pred = model(images)
+                            # Segmentation loss with class weights
+                            true_masks_processed = true_masks.clone()
+                            true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
+                            loss = criterion(masks_pred, true_masks)
+                            loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
                     else:
-                        true_masks_processed = true_masks.clone()
-                        true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
-                        loss = criterion(masks_pred, true_masks)
-                        loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
+                        # Standard training for other models
+                        masks_pred = model(images)
+                        if model.n_classes == 1:
+                            loss = criterion(masks_pred.squeeze(1), true_masks.float())
+                            loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
+                        else:
+                            true_masks_processed = true_masks.clone()
+                            true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
+                            loss = criterion(masks_pred, true_masks)
+                            loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
@@ -152,131 +190,141 @@ def train_model(
                 epoch_loss += loss.item()
                 
                 # Compute per-class IoU, Dice Score, and Pixel Accuracy
-                dice_scores = compute_dice_per_class(masks_pred.argmax(dim=1), true_masks_processed, n_classes=model.n_classes)
-                iou_scores = compute_iou_per_class(masks_pred.argmax(dim=1), true_masks_processed, n_classes=model.n_classes)
-                pixel_acc = compute_pixel_accuracy(masks_pred.argmax(dim=1), true_masks_processed)
+                # Skip these metrics during reconstruction phase of autoencoder
+                if not (isinstance(model, Autoencoder) and model.training_phase == "reconstruction"):
+                    dice_scores = compute_dice_per_class(masks_pred.argmax(dim=1), true_masks_processed, n_classes=model.n_classes)
+                    iou_scores = compute_iou_per_class(masks_pred.argmax(dim=1), true_masks_processed, n_classes=model.n_classes)
+                    pixel_acc = compute_pixel_accuracy(masks_pred.argmax(dim=1), true_masks_processed)
 
-                total_dice += dice_scores
-                total_iou += iou_scores
-                total_acc += pixel_acc
+                    total_dice += dice_scores
+                    total_iou += iou_scores
+                    total_acc += pixel_acc
 
-                # Log training metrics
-                experiment.log({
-                    'train loss': loss.item(),
-                    'train Dice (avg)': dice_scores.mean().item(),
-                    'train IoU (avg)': iou_scores.mean().item(),
-                    'train Pixel Accuracy': pixel_acc,
-                    **{f'train Dice class {i}': dice_scores[i].item() for i in range(model.n_classes)},
-                    **{f'train IoU class {i}': iou_scores[i].item() for i in range(model.n_classes)},
-                    'step': global_step,
-                    'epoch': epoch
-                })
+                    # Log training metrics
+                    experiment.log({
+                        'train loss': loss.item(),
+                        'train Dice (avg)': dice_scores.mean().item(),
+                        'train IoU (avg)': iou_scores.mean().item(),
+                        'train Pixel Accuracy': pixel_acc,
+                        **{f'train Dice class {i}': dice_scores[i].item() for i in range(model.n_classes)},
+                        **{f'train IoU class {i}': iou_scores[i].item() for i in range(model.n_classes)},
+                        'step': global_step,
+                        'epoch': epoch
+                    })
+                    
+                    pbar.set_postfix(loss=f"{loss.item():.4f}", dice=f"{dice_scores.mean().item():.4f}", iou=f"{iou_scores.mean().item():.4f}")
+                else:
+                    # During reconstruction phase, only log reconstruction loss
+                    experiment.log({
+                        'train reconstruction loss': loss.item(),
+                        'step': global_step,
+                        'epoch': epoch
+                    })
+                    
+                    pbar.set_postfix(recon_loss=f"{loss.item():.4f}")
 
-                pbar.set_postfix(loss=f"{loss.item():.4f}", dice=f"{dice_scores.mean().item():.4f}", iou=f"{iou_scores.mean().item():.4f}")
-                
         # Compute average training metrics
-        avg_dice = total_dice / len(train_loader)
-        avg_iou = total_iou / len(train_loader)
-        avg_acc = total_acc / len(train_loader)
-        epoch_loss /= len(train_loader)
+        if not (isinstance(model, Autoencoder) and model.training_phase == "reconstruction"):
+            avg_dice = total_dice / len(train_loader)
+            avg_iou = total_iou / len(train_loader)
+            avg_acc = total_acc / len(train_loader)
+            epoch_loss /= len(train_loader)
 
-        logging.info(f"Epoch {epoch} - Training Loss: {epoch_loss:.4f}, Dice Score: {avg_dice.mean().item():.4f}, IoU: {avg_iou.mean().item():.4f}, Pixel Acc: {avg_acc:.4f}")
+            logging.info(f"Epoch {epoch} - Training Loss: {epoch_loss:.4f}, Dice Score: {avg_dice.mean().item():.4f}, IoU: {avg_iou.mean().item():.4f}, Pixel Acc: {avg_acc:.4f}")
 
-        # Perform validation at the end of each epoch
-        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate(model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes)
-        
-        # Update scheduler (if using ReduceLROnPlateau)
-        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-            scheduler.step(val_iou)
+            # Perform validation at the end of each epoch
+            val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(
+                model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes
+            )
+            
+            # Update scheduler (if using ReduceLROnPlateau)
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val_iou)
+            else:
+                scheduler.step()
+
+            # Log validation metrics
+            experiment.log({
+                'validation Dice (avg)': val_dice,
+                'validation IoU (avg)': val_iou,
+                'validation Pixel Accuracy': val_acc,
+                **{f'validation Dice class {i}': val_dice_per_class[i].item() for i in range(model.n_classes)},
+                **{f'validation IoU class {i}': val_iou_per_class[i].item() for i in range(model.n_classes)},
+                'epoch': epoch
+            })
+
+            logging.info(f"Epoch {epoch} - Validation Dice Score: {val_dice:.4f}, IoU: {val_iou:.4f}, Pixel Acc: {val_acc:.4f}")
+
+            # Save the best model based on validation Dice Score
+            if val_iou > best_val_iou and epoch <= 10:
+                best_val_iou = val_iou
+                run_name = wandb.run.name
+                model_path = os.path.join(dir_checkpoint, f'best_model_{run_name}.pth')
+                state_dict = {"model_state_dict": model.state_dict(), "mask_values": train_set.mask_values}
+                torch.save(state_dict, model_path)
+                logging.info(f'Best model saved as {model_path}!')
+                
+            # Save the best model based on validation IoU after epoch 10 to avoid only saving early peaks
+            if epoch > 10 and val_iou > best_val_iou_after_epoch_10:
+                best_val_iou_after_epoch_10 = val_iou
+                run_name = wandb.run.name
+                model_path = os.path.join(dir_checkpoint, f'best_model_after_epoch_10_{run_name}.pth')
+                state_dict = {"model_state_dict": model.state_dict(), "mask_values": train_set.mask_values}
+                torch.save(state_dict, model_path)
+                logging.info(f'Best model after epoch 10 saved as {model_path}!')
         else:
+            # For reconstruction phase, only log reconstruction loss
+            epoch_loss /= len(train_loader)
+            logging.info(f"Epoch {epoch} - Reconstruction Loss: {epoch_loss:.4f}")
+            
+            # Save checkpoint after last reconstruction epoch
+            if epoch == epochs // 2:
+                run_name = wandb.run.name
+                model_path = os.path.join(dir_checkpoint, f'reconstruction_model_{run_name}.pth')
+                state_dict = {"model_state_dict": model.state_dict(), "mask_values": train_set.mask_values}
+                torch.save(state_dict, model_path)
+                logging.info(f'Reconstruction model saved as {model_path}!')
+                
+            # Still update scheduler
             scheduler.step()
 
-        # Log validation metrics
-        experiment.log({
-            'validation Dice (avg)': val_dice,
-            'validation IoU (avg)': val_iou,
-            'validation Pixel Accuracy': val_acc,
-            **{f'validation Dice class {i}': val_dice_per_class[i].item() for i in range(model.n_classes)},
-            **{f'validation IoU class {i}': val_iou_per_class[i].item() for i in range(model.n_classes)},
-            'epoch': epoch
-        })
-
-        logging.info(f"Epoch {epoch} - Validation Dice Score: {val_dice:.4f}, IoU: {val_iou:.4f}, Pixel Acc: {val_acc:.4f}")
-
-        # Save the best model based on validation Dice Score
-        if val_iou > best_val_iou and epoch <= 10:
-            best_val_iou = val_iou
-            run_name = wandb.run.name
-            model_path = os.path.join(dir_checkpoint, f'best_model_{run_name}.pth')
-            state_dict = {"model_state_dict": model.state_dict(), "mask_values": train_set.mask_values}
-            torch.save(state_dict, model_path)
-            logging.info(f'Best model saved as {model_path}!')
-            
-        # Save the best model based on validation IoU after epoch 10 to avoid only saving early peaks
-        if epoch > 10 and val_iou > best_val_iou_after_epoch_10:
-            best_val_iou_after_epoch_10 = val_iou
-            run_name = wandb.run.name
-            model_path = os.path.join(dir_checkpoint, f'best_model_after_epoch_10_{run_name}.pth')
-            state_dict = {"model_state_dict": model.state_dict(), "mask_values": train_set.mask_values}
-            torch.save(state_dict, model_path)
-            logging.info(f'Best model after epoch 10 saved as {model_path}!')
-
-        # Optionally save checkpoint every epoch
-        if save_checkpoint or epoch == epochs or epoch == 50:
-            checkpoint_path = os.path.join(dir_checkpoint, f'checkpoint_epoch{epoch}.pth')
-            state_dict = {"model_state_dict": model.state_dict(), "mask_values": train_set.mask_values}
-            torch.save(state_dict, checkpoint_path)
-            logging.info(f'Checkpoint saved at {checkpoint_path}')
-            
-        
-        
     # After all epochs are completed, evaluate on the test set
     logging.info("Training complete. Evaluating on test set...")
-
+    
     # Load the best saved model
-    state_dict = torch.load(model_path, map_location=device, weights_only=True)
-    model.load_state_dict(state_dict['model_state_dict'])
+    state_dict = torch.load(model_path, map_location=device)
+    # Check which key format is used in the checkpoint
+    if 'model_state_dict' in state_dict:
+        model.load_state_dict(state_dict['model_state_dict'])
+    else:
+        model.load_state_dict(state_dict)
+    
     logging.info(f'Model loaded from {model_path}')
     model.to(device)
-    model.eval()
-
-    # Load test dataset
-    test_img_files = list(dir_test_img.glob('*'))
-    test_mask_files = list(dir_test_mask.glob('*'))
     
-    test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)  # Use same preprocessing as training
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
-
-    # Evaluate on the test set
-    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate(model, test_loader, device, amp=amp, dim=img_dim, desc='Testing round')
-
-    # Print test results
-    logging.info(f"Test Dice Score (Mean): {test_dice:.4f}")
-    logging.info(f"Test IoU (Mean): {test_iou:.4f}")
-    logging.info(f"Test Pixel Accuracy: {test_acc:.4f}")
-
-    for i, (dice, iou) in enumerate(zip(test_dice_per_class, test_iou_per_class)):
-        logging.info(f"Class {i} - Dice: {dice:.4f}, IoU: {iou:.4f}")
-
-    # Save results to a file
-    with open(model_path.replace('best_model', 'test_results').replace('.pth', '.txt'), "w") as f:
-        f.write(f"Test Dice Score (Mean): {test_dice:.4f}\n")
-        f.write(f"Test IoU (Mean): {test_iou:.4f}\n")
-        f.write(f"Test Pixel Accuracy: {test_acc:.4f}\n")
-        for i, (dice, iou) in enumerate(zip(test_dice_per_class, test_iou_per_class)):
-            f.write(f"Class {i} - Dice: {dice:.4f}, IoU: {iou:.4f}\n")
-
-    logging.info(f"Test evaluation complete. Results saved to {str(model_path).replace('best_model', 'test_results').replace('.pth', '.txt')}")
-
-    # Optional: Log test results to wandb
-    experiment.log({
-        "test Dice (avg)": test_dice,
-        "test IoU (avg)": test_iou,
-        "test Pixel Accuracy": test_acc,
-        **{f"test Dice class {i}": test_dice_per_class[i].item() for i in range(model.n_classes)},
-        **{f"test IoU class {i}": test_iou_per_class[i].item() for i in range(model.n_classes)},
-    })
+    # Use the evaluate_model function from test.py
+    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate_model(
+        model=model,
+        device=device,
+        img_dim=img_dim,
+        amp=amp,
+        n_classes=model.n_classes if hasattr(model, 'n_classes') else 3,
+        results_path=None,  # No need to save results to a file as we log to wandb
+        model_path=model_path,
+        in_training=True
+    )
     
+    # Log test results to wandb
+    if test_dice is not None:  # Make sure evaluation was successful
+        experiment.log({
+            "test Dice (avg)": test_dice,
+            "test IoU (avg)": test_iou,
+            "test Pixel Accuracy": test_acc,
+            **{f"test Dice class {i}": test_dice_per_class[i].item() for i in range(model.n_classes if hasattr(model, 'n_classes') else 3)},
+            **{f"test IoU class {i}": test_iou_per_class[i].item() for i in range(model.n_classes if hasattr(model, 'n_classes') else 3)},
+        })
+        
+    experiment.finish()
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
@@ -293,7 +341,7 @@ def get_args():
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
-    parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip'], default='unet', help='Choose model (unet or clip)')
+    parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip', 'autoencoder'], default='unet', help='Choose model (unet or clip)')
 
     return parser.parse_args()
 
@@ -309,10 +357,16 @@ if __name__ == '__main__':
     # n_classes is the number of probabilities you want to get per pixel
     model = get_model(args)
     
+    # Log different information based on model type
     if args.model == 'clip':
         logging.info(f'Network:\n'
                      f'\t{model.n_classes} output channels (classes)\n')
-    else:
+    elif args.model == 'autoencoder':
+        logging.info(f'Network:\n'
+                    f'\t{model.n_channels} input channels\n'
+                    f'\t{model.n_classes} output channels (classes)\n'
+                    f'\tAutoencoder with two-phase training')
+    else:  # UNet model
         logging.info(f'Network:\n'
                     f'\t{model.n_channels} input channels\n'
                     f'\t{model.n_classes} output channels (classes)\n'

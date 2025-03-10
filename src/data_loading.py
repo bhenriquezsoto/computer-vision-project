@@ -130,8 +130,10 @@ class SegmentationDataset(Dataset):
     def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', dim: int = 256):
         assert len(images) == len(masks), "Mismatch between number of images and masks!"
 
-        self.image_files = sorted(images)
-        self.mask_files = sorted(masks)
+        # Store the files directly, assuming they are already matched
+        self.image_files = images
+        self.mask_files = masks
+        
         self.mask_suffix = mask_suffix
         self.dim = dim
         
@@ -161,7 +163,7 @@ class SegmentationDataset(Dataset):
         
         
         assert img.shape[:2] == mask.shape[:2], \
-            f'Image and mask {img_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
+            f'Image and mask {img_file}, {mask_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
             
         # Apply the transformations for data augmentation and/or preprocessing
         img, mask, _ = preprocessing(img, mask, mode='train', dim=self.dim)
@@ -170,9 +172,10 @@ class SegmentationDataset(Dataset):
             'image': img,
             'mask': mask
         }
+
 class TestSegmentationDataset(Dataset):
     """General segmentation dataset for test and validation datasets, keeping the original mask.
-    
+
     Args:
         images_dir (list[str]): List of image filenames.
         mask_dir (list[str]): List of mask filenames.
@@ -185,8 +188,10 @@ class TestSegmentationDataset(Dataset):
     def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', dim: int = 256):
         assert len(images) == len(masks), "Mismatch between number of images and masks!"
 
-        self.image_files = sorted(images)
-        self.mask_files = sorted(masks)
+        # Store the files directly, assuming they are already matched
+        self.image_files = images
+        self.mask_files = masks
+        
         self.mask_suffix = mask_suffix
         self.dim = dim
         
@@ -225,3 +230,34 @@ class TestSegmentationDataset(Dataset):
             'image': img,
             'mask': original_mask
         }
+
+def sort_and_match_files(images, masks):
+    """
+    Sort and match image and mask files by their base names.
+    
+    Args:
+        images: List of image file paths
+        masks: List of mask file paths
+        
+    Returns:
+        matched_images: List of matched and sorted image file paths
+        matched_masks: List of matched and sorted mask file paths
+    """
+    print("Sorting and matching files...")
+    # Create dictionaries with base names as keys
+    image_dict = {Path(img).stem: img for img in images}
+    mask_dict = {Path(mask).stem: mask for mask in masks}
+    
+    # Find common base names
+    common_names = sorted(set(image_dict.keys()) & set(mask_dict.keys()))
+    
+    if len(common_names) < min(len(images), len(masks)):
+        logging.warning(f'Only {len(common_names)} out of {min(len(images), len(masks))} image-mask pairs matched by name!')
+        logging.warning(f'Example image names: {list(image_dict.keys())[:5]}')
+        logging.warning(f'Example mask names: {list(mask_dict.keys())[:5]}')
+    
+    # Create paired lists of matched files
+    matched_images = [image_dict[name] for name in common_names]
+    matched_masks = [mask_dict[name] for name in common_names]
+    
+    return matched_images, matched_masks
