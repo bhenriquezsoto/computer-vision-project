@@ -4,17 +4,117 @@ import os
 from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
-from evaluate import evaluate
 
+from metrics import compute_metrics
 from models.unet_model import UNet
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
-from data_loading import TestSegmentationDataset
+from data_loading import TestSegmentationDataset, sort_and_match_files
 
 # Set up directories
 dir_test_img = Path('Dataset/Test/color')
 dir_test_mask = Path('Dataset/Test/label')
 dir_checkpoint = Path('src/models/checkpoints/')
+
+def evaluate_model(
+    model,
+    device,
+    img_dim=256,
+    amp=False,
+    n_classes=3,
+    test_img_dir=dir_test_img,
+    test_mask_dir=dir_test_mask,
+    results_path=None,
+    model_path=None,
+    in_training=False
+):
+    """
+    Evaluate a model on the test dataset.
+    
+    Args:
+        model: The model to evaluate
+        device: Device to run evaluation on
+        img_dim: Image dimension
+        amp: Whether to use mixed precision
+        n_classes: Number of classes
+        test_img_dir: Directory with test images
+        test_mask_dir: Directory with test masks
+        results_path: Path to save results (if None, derived from model_path)
+        model_path: Path of the model (used for generating results_path if needed)
+        in_training: Whether the evaluation is in training phase
+    Returns:
+        Tuple of (mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class)
+    """
+    # Check if test directories exist
+    if not test_img_dir.exists() or not test_mask_dir.exists():
+        logging.error(f"Test directories not found. Please ensure these exist:")
+        logging.error(f"- {test_img_dir}")
+        logging.error(f"- {test_mask_dir}")
+        return None, None, None, None, None
+    
+    # Get test files
+    test_img_files = list(test_img_dir.glob('*'))
+    test_mask_files = list(test_mask_dir.glob('*'))
+    
+    if len(test_img_files) == 0 or len(test_mask_files) == 0:
+        logging.error(f"No files found in the test directories!")
+        return None, None, None, None, None
+    
+    logging.info(f"Found {len(test_img_files)} test images and {len(test_mask_files)} test masks")
+    
+    # Sort and match test images and masks
+    test_img_files, test_mask_files = sort_and_match_files(test_img_files, test_mask_files)
+    
+    # Create test dataset and dataloader
+    test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)
+    loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
+    
+    # Ensure model is in evaluation mode
+    model.eval()
+    
+    # Run evaluation using compute_metrics from metrics.py
+    mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class = compute_metrics(
+        model, test_loader, device, amp, dim=img_dim, n_classes=n_classes, desc='Testing round'
+    )
+    
+    # Print results
+    logging.info("=== Test Results ===")
+    logging.info(f"Mean Dice Score: {mean_dice:.4f}")
+    logging.info(f"Mean IoU: {mean_iou:.4f}")
+    logging.info(f"Mean Pixel Accuracy: {mean_acc:.4f}")
+    
+    logging.info("Per-class metrics:")
+    for i in range(n_classes):
+        logging.info(f"Class {i}:")
+        logging.info(f"  - Dice Score: {dice_per_class[i].item():.4f}")
+        logging.info(f"  - IoU: {iou_per_class[i].item():.4f}")
+    
+    # Save results to file if path provided
+    if results_path is None and model_path is not None:
+        # Generate results path from model path
+        if isinstance(model_path, str):
+            results_path = model_path.replace('.pth', '_test_results.txt')
+        else:
+            results_path = str(model_path).replace('.pth', '_test_results.txt')
+    
+    if results_path:
+        with open(results_path, 'w') as f:
+            f.write(f"Test Results for model:\n")
+            f.write(f"Mean Dice Score: {mean_dice:.4f}\n")
+            f.write(f"Mean IoU: {mean_iou:.4f}\n")
+            f.write(f"Mean Pixel Accuracy: {mean_acc:.4f}\n\n")
+            
+            f.write("Per-class metrics:\n")
+            for i in range(n_classes):
+                f.write(f"Class {i}:\n")
+                f.write(f"  - Dice Score: {dice_per_class[i].item():.4f}\n")
+                f.write(f"  - IoU: {iou_per_class[i].item():.4f}\n")
+        
+        if in_training:
+            logging.info(f"Results saved to {results_path}")
+    
+    return mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class
 
 def get_args():
     parser = argparse.ArgumentParser(description='Test a trained model on the test set')
@@ -61,62 +161,18 @@ def main():
     
     logging.info(f'Model loaded from {args.model_path}')
     model.to(device)
-    model.eval()
     
-    # Check if test directories exist
-    if not dir_test_img.exists() or not dir_test_mask.exists():
-        logging.error(f"Test directories not found. Please ensure these exist:")
-        logging.error(f"- {dir_test_img}")
-        logging.error(f"- {dir_test_mask}")
-        return
-    
-    # Get test files
-    test_img_files = list(dir_test_img.glob('*'))
-    test_mask_files = list(dir_test_mask.glob('*'))
-    
-    if len(test_img_files) == 0 or len(test_mask_files) == 0:
-        logging.error(f"No files found in the test directories!")
-        return
-    
-    logging.info(f"Found {len(test_img_files)} test images and {len(test_mask_files)} test masks")
-    
-    # Create test dataset and dataloader
-    test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=args.img_dim)
-    loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
-    
-    # Run evaluation directly
-    mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class = evaluate(
-        model, test_loader, device, args.amp, dim=args.img_dim, n_classes=args.classes, desc='Testing round'
-    )
-    
-    # Print results
-    logging.info("=== Test Results ===")
-    logging.info(f"Mean Dice Score: {mean_dice:.4f}")
-    logging.info(f"Mean IoU: {mean_iou:.4f}")
-    logging.info(f"Mean Pixel Accuracy: {mean_acc:.4f}")
-    
-    logging.info("Per-class metrics:")
-    for i in range(args.classes):
-        logging.info(f"Class {i}:")
-        logging.info(f"  - Dice Score: {dice_per_class[i].item():.4f}")
-        logging.info(f"  - IoU: {iou_per_class[i].item():.4f}")
-    
-    # Save results to file
+    # Use the evaluate_model function
     results_path = args.model_path.replace('.pth', '_test_results.txt')
-    with open(results_path, 'w') as f:
-        f.write(f"Test Results for {args.model_path}:\n")
-        f.write(f"Mean Dice Score: {mean_dice:.4f}\n")
-        f.write(f"Mean IoU: {mean_iou:.4f}\n")
-        f.write(f"Mean Pixel Accuracy: {mean_acc:.4f}\n\n")
-        
-        f.write("Per-class metrics:\n")
-        for i in range(args.classes):
-            f.write(f"Class {i}:\n")
-            f.write(f"  - Dice Score: {dice_per_class[i].item():.4f}\n")
-            f.write(f"  - IoU: {iou_per_class[i].item():.4f}\n")
-    
-    logging.info(f"Results saved to {results_path}")
+    evaluate_model(
+        model=model,
+        device=device,
+        img_dim=args.img_dim,
+        amp=args.amp,
+        n_classes=args.classes,
+        results_path=results_path,
+        model_path=args.model_path
+    )
 
 if __name__ == '__main__':
     main()

@@ -5,14 +5,15 @@ from pathlib import Path
 import torch
 from torch import optim
 from torch import nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from torch.amp import GradScaler
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
 import wandb
-from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
+from metrics import compute_metrics, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
+from test import evaluate_model
 from models.unet_model import UNet 
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
@@ -232,7 +233,9 @@ def train_model(
             logging.info(f"Epoch {epoch} - Training Loss: {epoch_loss:.4f}, Dice Score: {avg_dice.mean().item():.4f}, IoU: {avg_iou.mean().item():.4f}, Pixel Acc: {avg_acc:.4f}")
 
             # Perform validation at the end of each epoch
-            val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate(model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes)
+            val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(
+                model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes
+            )
             
             # Update scheduler (if using ReduceLROnPlateau)
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -287,54 +290,41 @@ def train_model(
 
     # After all epochs are completed, evaluate on the test set
     logging.info("Training complete. Evaluating on test set...")
-
+    
     # Load the best saved model
-    state_dict = torch.load(model_path, map_location=device, weights_only=True)
-    model.load_state_dict(state_dict['model_state_dict'])
+    state_dict = torch.load(model_path, map_location=device)
+    # Check which key format is used in the checkpoint
+    if 'model_state_dict' in state_dict:
+        model.load_state_dict(state_dict['model_state_dict'])
+    else:
+        model.load_state_dict(state_dict)
+    
     logging.info(f'Model loaded from {model_path}')
     model.to(device)
-    model.eval()
-
-    # Load test dataset
-    test_img_files = list(dir_test_img.glob('*'))
-    test_mask_files = list(dir_test_mask.glob('*'))
     
-    # Sort and match test images and masks using the same function
-    test_img_files, test_mask_files = sort_and_match_files(test_img_files, test_mask_files)
+    # Use the evaluate_model function from test.py
+    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate_model(
+        model=model,
+        device=device,
+        img_dim=img_dim,
+        amp=amp,
+        n_classes=model.n_classes if hasattr(model, 'n_classes') else 3,
+        results_path=None,  # No need to save results to a file as we log to wandb
+        model_path=model_path,
+        in_training=True
+    )
     
-    test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)  # Use same preprocessing as training
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
-
-    # Evaluate on the test set
-    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate(model, test_loader, device, amp=amp, dim=img_dim, desc='Testing round')
-
-    # Print test results
-    logging.info(f"Test Dice Score (Mean): {test_dice:.4f}")
-    logging.info(f"Test IoU (Mean): {test_iou:.4f}")
-    logging.info(f"Test Pixel Accuracy: {test_acc:.4f}")
-
-    for i, (dice, iou) in enumerate(zip(test_dice_per_class, test_iou_per_class)):
-        logging.info(f"Class {i} - Dice: {dice:.4f}, IoU: {iou:.4f}")
-
-    # Save results to a file
-    with open(model_path.replace('best_model', 'test_results').replace('.pth', '.txt'), "w") as f:
-        f.write(f"Test Dice Score (Mean): {test_dice:.4f}\n")
-        f.write(f"Test IoU (Mean): {test_iou:.4f}\n")
-        f.write(f"Test Pixel Accuracy: {test_acc:.4f}\n")
-        for i, (dice, iou) in enumerate(zip(test_dice_per_class, test_iou_per_class)):
-            f.write(f"Class {i} - Dice: {dice:.4f}, IoU: {iou:.4f}\n")
-
-    logging.info(f"Test evaluation complete. Results saved to {str(model_path).replace('best_model', 'test_results').replace('.pth', '.txt')}")
-
-    # Optional: Log test results to wandb
-    experiment.log({
-        "test Dice (avg)": test_dice,
-        "test IoU (avg)": test_iou,
-        "test Pixel Accuracy": test_acc,
-        **{f"test Dice class {i}": test_dice_per_class[i].item() for i in range(model.n_classes)},
-        **{f"test IoU class {i}": test_iou_per_class[i].item() for i in range(model.n_classes)},
-    })
-    
+    # Log test results to wandb
+    if test_dice is not None:  # Make sure evaluation was successful
+        experiment.log({
+            "test Dice (avg)": test_dice,
+            "test IoU (avg)": test_iou,
+            "test Pixel Accuracy": test_acc,
+            **{f"test Dice class {i}": test_dice_per_class[i].item() for i in range(model.n_classes if hasattr(model, 'n_classes') else 3)},
+            **{f"test IoU class {i}": test_iou_per_class[i].item() for i in range(model.n_classes if hasattr(model, 'n_classes') else 3)},
+        })
+        
+    experiment.finish()
 
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')

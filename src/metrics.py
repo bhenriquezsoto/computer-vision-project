@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 from torch import Tensor
-import numpy as np
 
 
 def compute_dice_per_class(pred: Tensor, target: Tensor, n_classes: int = 3, epsilon: float = 1e-6):
@@ -77,9 +76,9 @@ def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float 
 
 
 @torch.inference_mode()
-def evaluate(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validation round'):
+def compute_metrics(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validation round'):
     """
-    Evaluates model on the validation dataset.
+    Computes metrics for a model on a dataset.
 
     Returns:
     - Mean Dice Score

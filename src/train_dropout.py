@@ -5,15 +5,15 @@ from pathlib import Path
 import torch
 from torch import optim
 from torch import nn
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from torch.amp import GradScaler
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ReduceLROnPlateau
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
 import wandb
-from evaluate import evaluate, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
-from a_unet.unet_model_dropout import UNet
+from metrics import compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
+from models.unet_model_dropout import UNet
 from data_loading import SegmentationDataset, TestSegmentationDataset
 
 
