@@ -17,7 +17,7 @@ from test import evaluate_model
 from models.unet_model import UNet 
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
-from data_loading import SegmentationDataset, TestSegmentationDataset, sort_and_match_files
+from data_loading import SegmentationDataset, sort_and_match_files
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
@@ -72,8 +72,8 @@ def train_model(
     val_masks = [matched_masks[i] for i in val_indices]
     
     # 2. Create dataset. If augmentation is enabled, tune the augmentation parameters in 'data_loading.py'
-    train_set = SegmentationDataset(train_images, train_masks, dim=img_dim)
-    val_set = TestSegmentationDataset(val_images, val_masks, dim=img_dim)
+    train_set = SegmentationDataset(train_images, train_masks, dim=img_dim, mode='train')
+    val_set = SegmentationDataset(val_images, val_masks, dim=img_dim, mode='valTest')
     
     print("Training set dimensions: ", len(train_set))
     print("Validation set dimensions: ", len(val_set))

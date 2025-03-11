@@ -9,7 +9,7 @@ from metrics import compute_metrics
 from models.unet_model import UNet
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
-from data_loading import TestSegmentationDataset, sort_and_match_files
+from data_loading import sort_and_match_files, SegmentationDataset
 
 # Set up directories
 dir_test_img = Path('Dataset/Test/color')
@@ -66,7 +66,7 @@ def evaluate_model(
     test_img_files, test_mask_files = sort_and_match_files(test_img_files, test_mask_files)
     
     # Create test dataset and dataloader
-    test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)
+    test_dataset = SegmentationDataset(test_img_files, test_mask_files, dim=img_dim, mode='test')
     loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
     

@@ -14,7 +14,7 @@ from sklearn.model_selection import train_test_split
 import wandb
 from metrics import compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss, compute_metrics
 from models.unet_model import UNet
-from data_loading import SegmentationDataset, TestSegmentationDataset
+from data_loading import SegmentationDataset
 
 
 dir_img = Path('Dataset/TrainVal/color')
@@ -48,8 +48,8 @@ def train_model(
     
     # 2. Create dataset. If augmentation is enabled, tune the augmentation parameters in 'data_loading.py'
 
-    train_set = SegmentationDataset(train_images, train_masks, dim=img_dim)
-    val_set = TestSegmentationDataset(val_images, val_masks, dim=img_dim)
+    train_set = SegmentationDataset(train_images, train_masks, dim=img_dim, mode='train')
+    val_set = SegmentationDataset(val_images, val_masks, dim=img_dim, mode='valTest')
 
     print("Training set dimensions: ", len(train_set))
 
@@ -235,7 +235,7 @@ def train_model(
     test_img_files = list(dir_test_img.glob('*'))
     test_mask_files = list(dir_test_mask.glob('*'))
     
-    test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)  # Use same preprocessing as training
+    test_dataset = SegmentationDataset(test_img_files, test_mask_files, dim=img_dim, mode='test')  # Use same preprocessing as training
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
 
     # Evaluate on the test set
