@@ -123,4 +123,30 @@ class UNet(nn.Module):
         self.outc = torch.utils.checkpoint(self.outc)
     
 
+class PointUNet(UNet):
+    """U-Net model modified to accept point prompts as additional input channel.
+    
+    This model takes a 4-channel input:
+    - 3 channels for RGB image
+    - 1 channel for point heatmap
+    """
+    def __init__(self, n_classes: int, bilinear: bool = False):
+        # Initialize with 4 input channels (3 RGB + 1 point heatmap)
+        super().__init__(n_channels=4, n_classes=n_classes, bilinear=bilinear)
+        
+    def forward(self, image: torch.Tensor, point_heatmap: torch.Tensor) -> torch.Tensor:
+        """Forward pass that accepts separate image and point heatmap inputs.
+        
+        Args:
+            image: RGB image tensor of shape (B, 3, H, W)
+            point_heatmap: Point heatmap tensor of shape (B, 1, H, W)
+            
+        Returns:
+            Segmentation logits of shape (B, n_classes, H, W)
+        """
+        # Concatenate image and point heatmap along channel dimension
+        x = torch.cat([image, point_heatmap], dim=1)  # Shape: (B, 4, H, W)
+        return super().forward(x)
+    
+
 

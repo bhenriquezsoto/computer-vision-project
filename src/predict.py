@@ -6,12 +6,11 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
-from torchvision import transforms
 
-from data_loading import SegmentationDataset, load_image, preprocessing
+from data_loading import load_image, preprocessing
 from models.unet_model import UNet
-from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
+from models.unet_model import PointUNet
 
 import matplotlib.pyplot as plt
 
@@ -56,6 +55,57 @@ def predict_img(net,
 
     return mask[0].long().squeeze().numpy()
 
+def predict_point_img(net,
+                    filename,
+                    point_coords,  # (y, x) coordinates of the clicked point
+                    device,
+                    dim=256,
+                    sigma=10.0):
+    """Predict segmentation mask for an image given a point prompt.
+    
+    Args:
+        net: PointUNet model
+        filename: Path to the image file
+        point_coords: Tuple of (y, x) coordinates of the clicked point
+        device: Device to run prediction on
+        dim: Target image dimension
+        sigma: Standard deviation for Gaussian heatmap
+    """
+    net.eval()
+    
+    # Load and preprocess image
+    full_img = load_image(filename)
+    img, _ = preprocessing(img=full_img, mask=None, dim=dim)
+    img = img.unsqueeze(0)
+    img = img.to(device=device, dtype=torch.float32)
+    
+    # Generate point heatmap
+    y, x = point_coords
+    # Scale coordinates to match preprocessed image size
+    scale_y = dim / full_img.shape[0]
+    scale_x = dim / full_img.shape[1]
+    scaled_y = int(y * scale_y)
+    scaled_x = int(x * scale_x)
+    
+    # Create heatmap
+    heatmap = np.zeros((dim, dim), dtype=np.float32)
+    y_coords = np.arange(0, dim, 1, float)
+    x_coords = np.arange(0, dim, 1, float)
+    y_coords, x_coords = np.meshgrid(y_coords, x_coords)
+    heatmap = np.exp(-((x_coords - scaled_x) ** 2 + (y_coords - scaled_y) ** 2) / (2 * sigma ** 2))
+    
+    # Convert heatmap to tensor
+    heatmap_tensor = torch.from_numpy(heatmap).float().unsqueeze(0).unsqueeze(0)
+    heatmap_tensor = heatmap_tensor.to(device=device)
+
+    with torch.no_grad():
+        output = net(img, heatmap_tensor)
+        # Use softmax for multi-class prediction
+        output = F.softmax(output, dim=1)  
+        output = F.interpolate(output, (full_img.shape[0], full_img.shape[1]), mode='bilinear')
+        mask = torch.argmax(output, dim=1)  # Get class with highest probability
+
+    return mask[0].cpu().numpy()
 
 def get_args():
     parser = argparse.ArgumentParser(description='Predict masks from input images')
@@ -63,6 +113,7 @@ def get_args():
                         help='Specify the file in which the model is stored')
     parser.add_argument('--input', '-i', metavar='INPUT', nargs='+', help='Filenames of input images', required=True)
     parser.add_argument('--output', '-o', metavar='OUTPUT', nargs='+', help='Filenames of output images')
+    parser.add_argument('--point', '-p', type=int, nargs=2, help='Point coordinates (y x) for point-based segmentation')
     parser.add_argument('--out-dir', '-d', type=str, default='src/a_unet/preds/', help='Directory to store output images')
     parser.add_argument('--viz', '-v', action='store_true',
                         help='Visualize the images as they are processed')
@@ -72,6 +123,8 @@ def get_args():
     parser.add_argument('--img-dim', '-s', type=int, default=256, help='Image dimension')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
+    parser.add_argument('--model-type', '-mt', type=str, choices=['unet', 'point_unet'], default='unet',
+                        help='Type of model to use')
     
     return parser.parse_args()
 
@@ -107,7 +160,12 @@ if __name__ == '__main__':
     in_files = args.input
     out_files = get_output_filenames(args)
 
-    net = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+    if args.model_type == 'point_unet':
+        if args.point is None:
+            raise ValueError("Point coordinates are required for point-based segmentation")
+        net = PointUNet(n_classes=3, bilinear=args.bilinear)  # 3 classes: background, cat, dog
+    else:
+        net = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Loading model {args.model}')
@@ -115,24 +173,41 @@ if __name__ == '__main__':
 
     net.to(device=device)
     state_dict = torch.load(args.model, map_location=device, weights_only=True)
-    net.load_state_dict(state_dict['model_state_dict'])
-    mask_values = state_dict['mask_values']
-
+    
+    # Load model weights and get mask values
+    if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
+        net.load_state_dict(state_dict['model_state_dict'])
+        mask_values = state_dict.get('mask_values', [0, 1, 2])  # Default to [0,1,2] if not found
+    else:
+        net.load_state_dict(state_dict)
+        mask_values = [0, 1, 2]  # Default mask values for 3 classes
+    
     logging.info('Model loaded!')
-    logging.info(f'Mask values: {mask_values}')
+    logging.info(f'Using mask values: {mask_values}')
 
     for i, filename in enumerate(in_files):
         logging.info(f'Predicting image {filename} ...')
 
-        mask = predict_img(net=net,
-                           filename=filename,
-                           dim=args.img_dim,
-                           out_threshold=args.mask_threshold,
-                           device=device)
+        if args.model_type == 'point_unet':
+            mask = predict_point_img(
+                net=net,
+                filename=filename,
+                point_coords=tuple(args.point),
+                device=device,
+                dim=args.img_dim
+            )
+        else:
+            mask = predict_img(
+                net=net,
+                filename=filename,
+                dim=args.img_dim,
+                out_threshold=args.mask_threshold,
+                device=device
+            )
 
         if not args.no_save:
             out_filename = out_files[i]
-            result = mask_to_image(mask, mask_values)
+            result = mask_to_image(mask, mask_values)  # Use loaded mask values
             result.save(out_filename)
             logging.info(f'Mask saved to {out_filename}')
 

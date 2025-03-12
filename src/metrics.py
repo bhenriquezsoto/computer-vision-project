@@ -143,3 +143,70 @@ def compute_metrics(net, dataloader, device, amp, dim = 256, n_classes=3, desc='
     mean_acc = total_acc / num_batches
 
     return mean_dice, mean_iou, mean_acc, total_dice / num_batches, total_iou / num_batches
+
+@torch.inference_mode()
+def evaluate_point_model(model, dataloader, device, amp, n_classes=3, desc='Validation round'):
+    """
+    Evaluate a point-based segmentation model.
+    This version handles multi-class segmentation with point prompts.
+    
+    Args:
+        model: The point-based segmentation model
+        dataloader: DataLoader for validation/test data
+        device: Device to run evaluation on
+        amp: Whether to use mixed precision
+        n_classes: Number of classes (default 3 for background, cat, dog)
+        desc: Description for the progress bar
+    
+    Returns:
+        mean_dice: Mean Dice score across all classes
+        mean_iou: Mean IoU across all classes
+        mean_acc: Mean pixel accuracy
+        dice_per_class: Dice scores for each class
+        iou_per_class: IoU scores for each class
+    """
+    model.eval()
+    num_batches = len(dataloader)
+    total_dice = torch.zeros(n_classes, device=device)
+    total_iou = torch.zeros(n_classes, device=device)
+    total_acc = 0
+    
+    # iterate over the validation set
+    with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
+        for batch in tqdm(dataloader, total=num_batches, desc=desc, unit='batch', leave=False):
+            image = batch['image']
+            point_heatmap = batch['point_heatmap']
+            true_mask = batch['mask']
+            
+            # Move to device
+            image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
+            point_heatmap = point_heatmap.to(device=device, dtype=torch.float32)
+            true_mask = true_mask.to(device=device, dtype=torch.long)  # Long tensor for multi-class
+            
+            # Get prediction
+            pred_logits = model(image, point_heatmap)
+            pred_mask = pred_logits.argmax(dim=1)  # Convert to class indices
+            
+            # Handle void label (255)
+            true_mask_processed = true_mask.clone()
+            true_mask_processed[true_mask_processed == 255] = 0
+            
+            # Compute metrics
+            dice_scores = compute_dice_per_class(pred_mask, true_mask_processed, n_classes=n_classes)
+            iou_scores = compute_iou_per_class(pred_mask, true_mask_processed, n_classes=n_classes)
+            pixel_acc = compute_pixel_accuracy(pred_mask, true_mask_processed)
+            
+            total_dice += dice_scores
+            total_iou += iou_scores
+            total_acc += pixel_acc
+
+    model.train()
+    
+    # Compute mean metrics
+    mean_dice = total_dice.mean().item() / num_batches
+    mean_iou = total_iou.mean().item() / num_batches
+    mean_acc = total_acc / num_batches
+    dice_per_class = total_dice / num_batches
+    iou_per_class = total_iou / num_batches
+    
+    return mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class

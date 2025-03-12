@@ -12,12 +12,12 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
 import wandb
-from metrics import compute_metrics, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
+from metrics import compute_metrics, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss, evaluate_point_model
 from test import evaluate_model
-from models.unet_model import UNet 
+from models.unet_model import UNet, PointUNet
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
-from data_loading import SegmentationDataset, sort_and_match_files
+from data_loading import SegmentationDataset, PointSegmentationDataset, sort_and_match_files
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
@@ -327,6 +327,168 @@ def train_model(
         
     experiment.finish()
 
+def train_point_model(
+        model,
+        device,
+        epochs: int = 50,
+        batch_size: int = 16,
+        optimizer: str = 'adam',
+        learning_rate: float = 1e-4,
+        weight_decay: float = 1e-4,
+        val_percent: float = 0.1,
+        save_checkpoint: bool = False,
+        img_dim: int = 256,
+        amp: bool = False,
+        gradient_clipping: float = 1.0
+):
+    """Training function specifically for point-based segmentation."""
+    # Create checkpoint directory
+    os.makedirs(dir_checkpoint, exist_ok=True)
+    
+    # Get all image and mask files
+    all_images = list(dir_img.glob('*'))
+    all_masks = list(dir_mask.glob('*'))
+    
+    # Match images and masks
+    matched_images, matched_masks = sort_and_match_files(all_images, all_masks)
+    
+    # Split into train/val
+    train_indices, val_indices = train_test_split(range(len(matched_images)), test_size=val_percent, random_state=42)
+    
+    train_images = [matched_images[i] for i in train_indices]
+    train_masks = [matched_masks[i] for i in train_indices]
+    val_images = [matched_images[i] for i in val_indices]
+    val_masks = [matched_masks[i] for i in val_indices]
+    
+    # Create point-based datasets
+    train_set = PointSegmentationDataset(train_images, train_masks, dim=img_dim)
+    val_set = PointSegmentationDataset(val_images, val_masks, dim=img_dim)
+    
+    print("Training set dimensions: ", len(train_set))
+    print("Validation set dimensions: ", len(val_set))
+
+    # Create data loaders
+    loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
+    train_loader = DataLoader(train_set, shuffle=True, batch_size=batch_size, **loader_args)
+    val_loader = DataLoader(val_set, shuffle=False, drop_last=True, batch_size=1, **loader_args)
+
+    # Initialize logging
+    experiment = wandb.init(project='Point-UNet', resume='allow', anonymous='must')
+    experiment.config.update(
+        dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate,
+             val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim,
+             model=model.__class__.__name__, amp=amp)
+    )
+
+    logging.info(f'''Starting point-based training:
+        Epochs:          {epochs}
+        Batch size:      {batch_size}
+        Learning rate:   {learning_rate}
+        Training size:   {len(train_set)}
+        Validation size: {len(val_set)}
+        Checkpoints:     {save_checkpoint}
+        Device:          {device.type}
+        Images size:     {img_dim}
+        Mixed Precision: {amp}
+    ''')
+
+    # Set up optimizer
+    if optimizer == 'adamw':
+        optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    elif optimizer == 'adam':
+        optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    else:
+        raise ValueError(f"Unsupported optimizer: {optimizer}")
+
+    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
+    grad_scaler = GradScaler(enabled=amp)
+    criterion = nn.CrossEntropyLoss(ignore_index=255)  # Use CrossEntropyLoss for multi-class
+    global_step = 0
+    best_val_dice = 0
+
+    # Begin training
+    for epoch in range(1, epochs + 1):
+        model.train()
+        epoch_loss = 0
+        with tqdm(total=len(train_set), desc=f'Epoch {epoch}/{epochs}', unit='img') as pbar:
+            for batch in train_loader:
+                images = batch['image']
+                point_heatmaps = batch['point_heatmap']
+                true_masks = batch['mask']
+
+                assert images.shape[1] == 3, \
+                    f'Network has 3 input channels, but got {images.shape[1]} channels.'
+
+                images = images.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
+                point_heatmaps = point_heatmaps.to(device=device, dtype=torch.float32)
+                true_masks = true_masks.to(device=device, dtype=torch.long)  # Long tensor for CrossEntropyLoss
+
+                with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
+                    masks_pred = model(images, point_heatmaps)
+                    loss = criterion(masks_pred, true_masks)  # CrossEntropyLoss expects (B, C, H, W) and (B, H, W)
+                    loss += dice_loss(masks_pred, true_masks, n_classes=model.n_classes)
+
+                optimizer.zero_grad(set_to_none=True)
+                grad_scaler.scale(loss).backward()
+                grad_scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), gradient_clipping)
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
+
+                pbar.update(images.shape[0])
+                global_step += 1
+                epoch_loss += loss.item()
+                
+                # Compute metrics for logging
+                with torch.no_grad():
+                    # Get predictions
+                    mask_pred = masks_pred.argmax(dim=1)
+                    # Compute Dice score and IoU for each class
+                    dice_scores = compute_dice_per_class(mask_pred, true_masks, n_classes=model.n_classes)
+                    iou_scores = compute_iou_per_class(mask_pred, true_masks, n_classes=model.n_classes)
+                
+                # Log training metrics
+                experiment.log({
+                    'train loss': loss.item(),
+                    'train Dice (avg)': dice_scores.mean().item(),
+                    'train IoU (avg)': iou_scores.mean().item(),
+                    **{f'train Dice class {i}': dice_scores[i].item() for i in range(model.n_classes)},
+                    **{f'train IoU class {i}': iou_scores[i].item() for i in range(model.n_classes)},
+                    'step': global_step,
+                    'epoch': epoch
+                })
+                
+                pbar.set_postfix(**{'loss': loss.item(), 'dice': dice_scores.mean().item()})
+
+        # Evaluation round
+        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(
+            model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes
+        )
+        scheduler.step()
+
+        logging.info(f'Validation Dice score: {val_dice:.4f}, IoU: {val_iou:.4f}, Accuracy: {val_acc:.4f}')
+        experiment.log({
+            'learning rate': optimizer.param_groups[0]['lr'],
+            'validation Dice': val_dice,
+            'validation IoU': val_iou,
+            'validation Accuracy': val_acc,
+            **{f'validation Dice class {i}': val_dice_per_class[i].item() for i in range(model.n_classes)},
+            **{f'validation IoU class {i}': val_iou_per_class[i].item() for i in range(model.n_classes)},
+            'epoch': epoch
+        })
+
+        # Save best model
+        if val_dice > best_val_dice:
+            best_val_dice = val_dice
+            state_dict = {
+                "model_state_dict": model.state_dict(),
+                "mask_values": train_set.mask_values
+            }
+            torch.save(state_dict, str(dir_checkpoint / 'best_point_model.pth'))
+            logging.info(f'New best model saved with dice score: {best_val_dice:.4f}')
+
+    return model
+
 def get_args():
     parser = argparse.ArgumentParser(description='Train the UNet on images and target masks')
     parser.add_argument('--epochs', '-e', metavar='E', type=int, default=50, help='Number of epochs')
@@ -342,8 +504,11 @@ def get_args():
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
-    parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip', 'autoencoder'], default='unet', help='Choose model (unet or clip)')
-    parser.add_argument('--class-weights', '-cw', type=float, nargs='+', default=None, help='Class weights, space-separated (e.g., -cw 0.1 0.8 0.6)')
+    parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip', 'autoencoder', 'point_unet'], default='unet', 
+                        help='Choose model type')
+    parser.add_argument('--class-weights', '-cw', type=float, nargs='+', default=None, 
+                        help='Class weights, space-separated (e.g., -cw 0.1 0.8 0.6)')
+    parser.add_argument('--save-checkpoint', '-sc', action='store_true', default=False, help='Save checkpoint')
 
     return parser.parse_args()
 
@@ -355,28 +520,34 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f'Using device {device}')
 
-    # n_channels=3 for RGB images
-    # n_classes is the number of probabilities you want to get per pixel
-    model = get_model(args)
-    
-    # Log different information based on model type
-    if args.model == 'clip':
+    if args.model == 'point_unet':
+        model = PointUNet(n_classes=3, bilinear=args.bilinear)  # 3 classes for background, cat, dog
         logging.info(f'Network:\n'
-                     f'\t{model.n_classes} output channels (classes)\n')
-    elif args.model == 'autoencoder':
-        logging.info(f'Network:\n'
-                    f'\t{model.n_channels} input channels\n'
-                    f'\t{model.n_classes} output channels (classes)\n'
-                    f'\tAutoencoder with two-phase training')
-    else:  # UNet model
-        logging.info(f'Network:\n'
-                    f'\t{model.n_channels} input channels\n'
+                    f'\t4 input channels (3 RGB + 1 point heatmap)\n'
                     f'\t{model.n_classes} output channels (classes)\n'
                     f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
+    else:
+        model = get_model(args)
+        if args.model == 'clip':
+            logging.info(f'Network:\n'
+                        f'\t{model.n_classes} output channels (classes)\n')
+        elif args.model == 'autoencoder':
+            logging.info(f'Network:\n'
+                        f'\t{model.n_channels} input channels\n'
+                        f'\t{model.n_classes} output channels (classes)\n'
+                        f'\tAutoencoder with two-phase training')
+        else:  # Standard UNet
+            logging.info(f'Network:\n'
+                        f'\t{model.n_channels} input channels\n'
+                        f'\t{model.n_classes} output channels (classes)\n'
+                        f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
 
     if args.load:
         state_dict = torch.load(args.load, map_location=device, weights_only=True)
-        model.load_state_dict(state_dict['model_state_dict'])
+        if 'model_state_dict' in state_dict:
+            model.load_state_dict(state_dict['model_state_dict'])
+        else:
+            model.load_state_dict(state_dict)
         logging.info(f'Model loaded from {args.load}')
         
     # Set class weights
@@ -389,36 +560,69 @@ if __name__ == '__main__':
 
 
     model.to(device=device)
+    save_checkpoint = args.save_checkpoint
     try:
-        train_model(
-            model=model,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.lr,
-            weight_decay=args.weight_decay,
-            optimizer=args.optimizer,
-            class_weights=class_weights,
-            device=device,
-            img_dim=args.img_dim,
-            val_percent=args.val / 100,
-            amp=args.amp
-        )
+        if args.model == 'point_unet':
+            train_point_model(
+                model=model,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.lr,
+                weight_decay=args.weight_decay,
+                optimizer=args.optimizer,
+                device=device,
+                img_dim=args.img_dim,
+                val_percent=args.val / 100,
+                amp=args.amp,
+                save_checkpoint=save_checkpoint
+            )
+        else:
+            train_model(
+                model=model,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.lr,
+                weight_decay=args.weight_decay,
+                optimizer=args.optimizer,
+                class_weights=class_weights,
+                device=device,
+                img_dim=args.img_dim,
+                val_percent=args.val / 100,
+                amp=args.amp,
+                save_checkpoint=save_checkpoint
+            )
     except torch.cuda.OutOfMemoryError:
         logging.error('Detected OutOfMemoryError! '
                       'Enabling checkpointing to reduce memory usage, but this slows down training. '
                       'Consider enabling AMP (--amp) for fast and memory efficient training')
         torch.cuda.empty_cache()
         model.use_checkpointing()
-        train_model(
-            model=model,
-            epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.lr,
-            weight_decay=args.weight_decay,
-            optimizer=args.optimizer,
-            class_weights=class_weights,
-            device=device,
-            img_dim=args.img_dim,
-            val_percent=args.val / 100,
-            amp=args.amp
-        )
+        if args.model == 'point_unet':
+            train_point_model(
+                model=model,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.lr,
+                weight_decay=args.weight_decay,
+                optimizer=args.optimizer,
+                device=device,
+                img_dim=args.img_dim,
+                val_percent=args.val / 100,
+                amp=args.amp,
+                save_checkpoint=save_checkpoint
+            )
+        else:
+            train_model(
+                model=model,
+                epochs=args.epochs,
+                batch_size=args.batch_size,
+                learning_rate=args.lr,
+                weight_decay=args.weight_decay,
+                optimizer=args.optimizer,
+                class_weights=class_weights,
+                device=device,
+                img_dim=args.img_dim,
+                val_percent=args.val / 100,
+                amp=args.amp,
+                save_checkpoint=save_checkpoint
+            )

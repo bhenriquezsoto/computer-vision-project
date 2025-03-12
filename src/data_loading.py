@@ -2,17 +2,14 @@ import logging
 import numpy as np
 import torch
 from PIL import Image
-from functools import lru_cache
-from functools import partial
-from itertools import repeat
 from multiprocessing import Pool
-from os import listdir
 from os.path import splitext, isfile, join
 from pathlib import Path
 from torch.utils.data import Dataset
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
+import torch.nn.functional as F
 
     
 def load_image(filename, is_mask=False):
@@ -203,3 +200,112 @@ def sort_and_match_files(images, masks):
     matched_masks = [mask_dict[name] for name in common_names]
     
     return matched_images, matched_masks
+
+
+class PointSegmentationDataset(Dataset):
+    """Point prompt segmentation dataset that generates point prompts for segmentation.
+    For each image-mask pair, it:
+    1. Randomly selects either cat (1) or dog (2) class
+    2. Samples a random point within that class region
+    3. Creates a Gaussian heatmap centered at that point
+    4. Returns the image, point heatmap, and corresponding binary mask
+    """
+    def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', dim: int = 256, sigma: float = 10.0):
+        assert len(images) == len(masks), "Mismatch between number of images and masks!"
+
+        # Store the files directly, assuming they are already matched
+        self.image_files = images
+        self.mask_files = masks
+        self.mask_suffix = mask_suffix
+        self.dim = dim
+        self.sigma = sigma  # Standard deviation for Gaussian heatmap
+        
+        logging.info(f'Creating dataset with {len(self.image_files)} examples')
+        logging.info('Scanning mask files to determine unique values')
+
+        # Use `masks` list directly instead of searching a directory
+        with Pool() as p:
+            unique = list(tqdm(
+                p.imap(unique_mask_values, self.mask_files),
+                total=len(self.mask_files)
+            ))
+
+        self.mask_values = list(sorted(np.unique(np.concatenate(unique), axis=0).tolist()))
+        logging.info(f'Unique mask values: {self.mask_values}')
+
+    def generate_gaussian_heatmap(self, center_y: int, center_x: int, height: int, width: int) -> np.ndarray:
+        """Generate a Gaussian heatmap centered at (center_y, center_x)."""
+        y = np.arange(0, height, 1, float)
+        x = np.arange(0, width, 1, float)
+        y, x = np.meshgrid(y, x)
+        
+        # Generate 2D gaussian
+        heatmap = np.exp(-((x - center_x) ** 2 + (y - center_y) ** 2) / (2 * self.sigma ** 2))
+        return heatmap
+
+    def sample_point_from_mask(self, mask: np.ndarray, target_class: int) -> tuple[int, int]:
+        """Sample a random point from the region of target_class in the mask."""
+        # Get coordinates where mask equals target class
+        y_coords, x_coords = np.where(mask == target_class)
+        
+        if len(y_coords) == 0:
+            raise ValueError(f"No pixels found for class {target_class}")
+            
+        # Randomly select one point
+        idx = np.random.randint(0, len(y_coords))
+        return y_coords[idx], x_coords[idx]
+
+    def __len__(self):
+        return len(self.image_files)
+
+    def __getitem__(self, idx):
+        img_file = self.image_files[idx]
+        mask_file = self.mask_files[idx]
+        
+        # Load the image and mask
+        mask = load_image(mask_file, is_mask=True)
+        img = load_image(img_file)
+        
+        assert img.shape[:2] == mask.shape[:2], \
+            f'Image and mask {img_file}, {mask_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
+            
+        # Randomly select either cat (1) or dog (2)
+        available_classes = []
+        if 1 in mask:  # Check if cat exists
+            available_classes.append(1)
+        if 2 in mask:  # Check if dog exists
+            available_classes.append(2)
+            
+        if not available_classes:
+            raise ValueError(f"No cat or dog found in mask {mask_file}")
+            
+        target_class = np.random.choice(available_classes)
+        
+        # Sample a random point from the selected class region
+        point_y, point_x = self.sample_point_from_mask(mask, target_class)
+        
+        # Create point heatmap
+        heatmap = self.generate_gaussian_heatmap(point_y, point_x, mask.shape[0], mask.shape[1])
+        
+        # Create binary mask for the target class
+        binary_mask = (mask == target_class).astype(np.float32)
+        
+        # Apply preprocessing to image, heatmap, and binary mask
+        img, mask, original_mask = preprocessing(img, binary_mask, mode='train', dim=self.dim)
+        
+        # Convert heatmap to tensor and resize to match preprocessed image
+        heatmap_tensor = torch.from_numpy(heatmap).float()
+        heatmap_tensor = heatmap_tensor.unsqueeze(0)  # Add channel dimension
+        heatmap_tensor = F.interpolate(
+            heatmap_tensor.unsqueeze(0),  # Add batch dimension
+            size=(self.dim, self.dim),
+            mode='bilinear',
+            align_corners=False
+        ).squeeze(0)  # Remove batch dimension
+        
+        return {
+            'image': img,  # Shape: (3, H, W)
+            'point_heatmap': heatmap_tensor,  # Shape: (1, H, W)
+            'mask': mask  # Shape: (H, W)
+        }
+
