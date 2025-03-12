@@ -145,31 +145,30 @@ def compute_metrics(net, dataloader, device, amp, n_classes=3, desc='Validation 
     return mean_dice, mean_iou, mean_acc, total_dice / num_batches, total_iou / num_batches
 
 @torch.inference_mode()
-def evaluate_point_model(model, dataloader, device, amp, n_classes=3, desc='Validation round'):
+def evaluate_point_model(model, dataloader, device, amp, desc='Validation round'):
     """
     Evaluate a point-based segmentation model.
-    This version handles multi-class segmentation with point prompts.
+    This version handles binary segmentation with point prompts.
     
     Args:
         model: The point-based segmentation model
         dataloader: DataLoader for validation/test data
         device: Device to run evaluation on
         amp: Whether to use mixed precision
-        n_classes: Number of classes (default 3 for background, cat, dog)
         desc: Description for the progress bar
     
     Returns:
-        mean_dice: Mean Dice score across all classes
-        mean_iou: Mean IoU across all classes
+        mean_dice: Mean Dice score
+        mean_iou: Mean IoU
         mean_acc: Mean pixel accuracy
-        dice_per_class: Dice scores for each class
-        iou_per_class: IoU scores for each class
+        dice_per_class: Dice scores (just one value for binary segmentation)
+        iou_per_class: IoU scores (just one value for binary segmentation)
     """
     model.eval()
     num_batches = len(dataloader)
-    total_dice = torch.zeros(n_classes, device=device)
-    total_iou = torch.zeros(n_classes, device=device)
-    total_acc = 0
+    total_dice = 0.0
+    total_iou = 0.0
+    total_acc = 0.0
     
     # iterate over the validation set
     with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
@@ -177,38 +176,49 @@ def evaluate_point_model(model, dataloader, device, amp, n_classes=3, desc='Vali
             image = batch['image']
             point_heatmap = batch['point_heatmap']
             true_mask = batch['mask']
-            # Get clicked class if available (for debugging)
-            clicked_class = batch.get('clicked_class', None)
             
             # Move to device
             image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
             point_heatmap = point_heatmap.to(device=device, dtype=torch.float32)
-            true_mask = true_mask.to(device=device, dtype=torch.long)  # Long tensor for multi-class
+            true_mask = true_mask.to(device=device, dtype=torch.float32)  # Float tensor for binary mask
             
             # Get prediction
             pred_logits = model(image, point_heatmap)
-            pred_mask = pred_logits.argmax(dim=1)  # Convert to class indices
             
-            # Handle void label (255)
-            true_mask_processed = true_mask.clone()
-            true_mask_processed[true_mask_processed == 255] = 0
+            # Handle multi-class output from model
+            if pred_logits.shape[1] > 1:
+                pred_logits = pred_logits[:, 1:2, :, :]  # Keep only the foreground channel
             
-            # Compute metrics
-            dice_scores = compute_dice_per_class(pred_mask, true_mask_processed, n_classes=n_classes)
-            iou_scores = compute_iou_per_class(pred_mask, true_mask_processed, n_classes=n_classes)
-            pixel_acc = compute_pixel_accuracy(pred_mask, true_mask_processed)
+            # Convert logits to binary predictions (0 or 1)
+            pred_mask = (torch.sigmoid(pred_logits) > 0.5).float().squeeze(1)
             
-            total_dice += dice_scores
-            total_iou += iou_scores
-            total_acc += pixel_acc
+            # Compute metrics for binary segmentation
+            intersection = (pred_mask * true_mask).sum()
+            union = pred_mask.sum() + true_mask.sum() - intersection
+            
+            # Compute Dice score: 2*intersection / (sum of areas)
+            dice = (2. * intersection + 1e-6) / (pred_mask.sum() + true_mask.sum() + 1e-6)
+            
+            # Compute IoU: intersection / union
+            iou = (intersection + 1e-6) / (union + 1e-6)
+            
+            # Compute pixel accuracy
+            acc = ((pred_mask == true_mask).sum() / true_mask.numel())
+            
+            total_dice += dice.item()
+            total_iou += iou.item()
+            total_acc += acc.item()
 
     model.train()
     
     # Compute mean metrics
-    mean_dice = total_dice.mean().item() / num_batches
-    mean_iou = total_iou.mean().item() / num_batches
+    mean_dice = total_dice / num_batches
+    mean_iou = total_iou / num_batches
     mean_acc = total_acc / num_batches
-    dice_per_class = total_dice / num_batches
-    iou_per_class = total_iou / num_batches
+    
+    # For binary segmentation, we'll return the same value for all classes
+    # This maintains compatibility with the expected return format
+    dice_per_class = torch.tensor([mean_dice], device=device)
+    iou_per_class = torch.tensor([mean_iou], device=device)
     
     return mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class

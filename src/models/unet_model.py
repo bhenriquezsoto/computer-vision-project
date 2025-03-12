@@ -129,10 +129,14 @@ class PointUNet(UNet):
     This model takes a 4-channel input:
     - 3 channels for RGB image
     - 1 channel for point heatmap
+    
+    It performs binary segmentation based on the point prompt, outputting
+    a single-channel mask where 1 is the object containing the point and 0 is everything else.
     """
-    def __init__(self, n_classes: int, bilinear: bool = False):
+    def __init__(self, n_classes: int = 1, bilinear: bool = False):
         # Initialize with 4 input channels (3 RGB + 1 point heatmap)
-        super().__init__(n_channels=4, n_classes=n_classes, bilinear=bilinear)
+        # For binary segmentation, we only need 1 output channel
+        super().__init__(n_channels=4, n_classes=1, bilinear=bilinear)
         
     def forward(self, image: torch.Tensor, point_heatmap: torch.Tensor) -> torch.Tensor:
         """Forward pass that accepts separate image and point heatmap inputs.
@@ -142,7 +146,7 @@ class PointUNet(UNet):
             point_heatmap: Point heatmap tensor of shape (B, 1, H, W)
             
         Returns:
-            Segmentation logits of shape (B, n_classes, H, W)
+            Segmentation logits of shape (B, 1, H, W) - binary segmentation
         """
         # Concatenate image and point heatmap along channel dimension
         x = torch.cat([image, point_heatmap], dim=1)  # Shape: (B, 4, H, W)

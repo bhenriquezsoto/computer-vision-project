@@ -297,18 +297,18 @@ class PointSegmentationDataset(Dataset):
         # Sample a random point from the selected class region
         point_y, point_x = self.sample_point_from_mask(mask, clicked_class)
         
-        # Create point heatmap - use wider heatmap for background clicks
+        # Create point heatmap - use wider sigma for background clicks
         is_background = (clicked_class == 0)
         heatmap = self.generate_gaussian_heatmap(point_y, point_x, 
                                             mask.shape[0], mask.shape[1], 
                                             bg_emphasis=is_background)
         
-        # Keep the original mask instead of converting to binary
-        # This allows the model to learn multi-class segmentation
-        # The loss function will use the clicked_class information to guide the learning
+        # Create binary mask: 1 for the clicked class, 0 for everything else
+        binary_mask = np.zeros_like(mask)
+        binary_mask[mask == clicked_class] = 1
         
-        # Apply preprocessing to image and mask
-        img, processed_mask, original_mask = preprocessing(img, mask, mode='train', dim=self.dim)
+        # Apply preprocessing to image and binary mask
+        img, mask, _ = preprocessing(img, binary_mask, mode='train', dim=self.dim)
         
         # Convert heatmap to tensor and resize to match preprocessed image
         heatmap_tensor = torch.from_numpy(heatmap).float()
@@ -323,7 +323,7 @@ class PointSegmentationDataset(Dataset):
         return {
             'image': img,  # Shape: (3, H, W)
             'point_heatmap': heatmap_tensor,  # Shape: (1, H, W)
-            'mask': processed_mask,  # Shape: (H, W) - multi-class mask (0, 1, 2)
-            'clicked_class': clicked_class  # The class that was clicked
+            'mask': mask,  # Shape: (H, W) - binary mask (1 for target class, 0 for everything else)
+            'clicked_class': clicked_class  # The class that was clicked (for reference/debugging)
         }
 

@@ -402,7 +402,10 @@ def train_point_model(
 
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
     grad_scaler = GradScaler(enabled=amp)
-    criterion = nn.CrossEntropyLoss(ignore_index=255)  # Use CrossEntropyLoss for multi-class
+    
+    # Use Binary Cross Entropy with Logits Loss for binary segmentation task
+    criterion = nn.BCEWithLogitsLoss()
+    
     global_step = 0
     best_val_dice = 0
 
@@ -422,18 +425,24 @@ def train_point_model(
 
                 images = images.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
                 point_heatmaps = point_heatmaps.to(device=device, dtype=torch.float32)
-                true_masks = true_masks.to(device=device, dtype=torch.long)  # Long tensor for CrossEntropyLoss
+                true_masks = true_masks.to(device=device, dtype=torch.float32)  # Float tensor for BCEWithLogitsLoss
                 if clicked_class is not None:
                     clicked_class = clicked_class.to(device=device)
 
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
                     masks_pred = model(images, point_heatmaps)
                     
-                    # Standard cross entropy loss for multi-class segmentation
-                    loss = criterion(masks_pred, true_masks)
+                    # Binary Cross Entropy loss for binary segmentation
+                    # For PointUNet, we need to squeeze the output from (B, n_classes, H, W) to (B, H, W)
+                    if masks_pred.shape[1] > 1:  # If model outputs multiple classes
+                        # Just take the first channel as foreground prediction
+                        masks_pred = masks_pred[:, 1:2, :, :]  # Keep only the foreground channel (shape: B, 1, H, W)
                     
-                    # Add Dice loss for better segmentation quality
-                    loss += dice_loss(masks_pred, true_masks, n_classes=model.n_classes)
+                    loss = criterion(masks_pred.squeeze(1), true_masks)
+                    
+                    # Add binary Dice loss for better segmentation quality
+                    # Use n_classes=1 for binary segmentation
+                    loss += dice_loss(masks_pred.squeeze(1), true_masks, n_classes=1)
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
@@ -528,10 +537,12 @@ if __name__ == '__main__':
     logging.info(f'Using device {device}')
 
     if args.model == 'point_unet':
-        model = PointUNet(n_classes=3, bilinear=args.bilinear)  # 3 classes for background, cat, dog
+        # For point-based segmentation, we always use binary segmentation (n_classes=1)
+        # regardless of what was passed in the command line arguments
+        model = PointUNet(n_classes=1, bilinear=args.bilinear)
         logging.info(f'Network:\n'
                     f'\t4 input channels (3 RGB + 1 point heatmap)\n'
-                    f'\t{model.n_classes} output channels (classes)\n'
+                    f'\t1 output channel (binary segmentation)\n'
                     f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
     else:
         model = get_model(args)
