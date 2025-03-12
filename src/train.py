@@ -478,8 +478,7 @@ def train_point_model(
 
         # Evaluation round
         val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate_point_model(
-            model, val_loader, device, amp, n_classes=model.n_classes
-        )
+            model, val_loader, device, amp)
         scheduler.step()
 
         logging.info(f'Validation Dice score: {val_dice:.4f}, IoU: {val_iou:.4f}, Accuracy: {val_acc:.4f}')
