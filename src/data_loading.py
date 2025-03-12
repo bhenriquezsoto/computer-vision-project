@@ -243,15 +243,27 @@ class PointSegmentationDataset(Dataset):
             width: Width of output heatmap
             bg_emphasis: If True, use wider sigma for background points to emphasize larger regions
         """
+        # Create coordinate grid
         y = np.arange(0, height, 1, float)
         x = np.arange(0, width, 1, float)
         y, x = np.meshgrid(y, x)
         
+        # Adjust sigma based on class type and image dimensions
+        base_sigma = min(height, width) / 25.0  # Dynamic base sigma based on image size
+        
         # Use larger sigma for background points to emphasize larger regions
-        sigma = self.sigma * 1.5 if bg_emphasis else self.sigma
+        # For background: 2.5x base sigma, for objects: base sigma
+        sigma = base_sigma * 2.5 if bg_emphasis else base_sigma
+        
+        # Ensure minimum and maximum value for sigma
+        sigma = max(3.0, min(sigma, 10.0))
         
         # Generate 2D gaussian
         heatmap = np.exp(-((x - center_x) ** 2 + (y - center_y) ** 2) / (2 * sigma ** 2))
+        
+        # Normalize to [0, 1]
+        heatmap = heatmap / heatmap.max()
+        
         return heatmap
 
     def sample_point_from_mask(self, mask: np.ndarray, target_class: int) -> tuple[int, int]:
@@ -305,7 +317,8 @@ class PointSegmentationDataset(Dataset):
         
         # Create binary mask: 1 for the clicked class, 0 for everything else
         binary_mask = np.zeros_like(mask)
-        binary_mask[mask == clicked_class] = 1
+        # Only set pixels to 1 where mask equals clicked_class and is not void (255)
+        binary_mask[(mask == clicked_class) & (mask != 255)] = 1
         
         # Apply preprocessing to image and binary mask
         img, mask, _ = preprocessing(img, binary_mask, mode='train', dim=self.dim)

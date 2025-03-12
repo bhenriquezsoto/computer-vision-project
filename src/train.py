@@ -333,8 +333,8 @@ def train_point_model(
         epochs: int = 50,
         batch_size: int = 16,
         optimizer: str = 'adam',
-        learning_rate: float = 1e-4,
-        weight_decay: float = 1e-4,
+        learning_rate: float = 3e-4,  # Slightly higher learning rate for better convergence
+        weight_decay: float = 1e-5,   # Slightly stronger regularization
         val_percent: float = 0.1,
         save_checkpoint: bool = False,
         img_dim: int = 256,
@@ -433,16 +433,18 @@ def train_point_model(
                     masks_pred = model(images, point_heatmaps)
                     
                     # Binary Cross Entropy loss for binary segmentation
-                    # For PointUNet, we need to squeeze the output from (B, n_classes, H, W) to (B, H, W)
-                    if masks_pred.shape[1] > 1:  # If model outputs multiple classes
-                        # Just take the first channel as foreground prediction
-                        masks_pred = masks_pred[:, 1:2, :, :]  # Keep only the foreground channel (shape: B, 1, H, W)
+                    # Make sure we have the right shape for binary BCE loss
+                    masks_pred = masks_pred.view(masks_pred.size(0), -1)  # Flatten to (B, H*W)
+                    true_masks_flat = true_masks.view(true_masks.size(0), -1)  # Flatten to (B, H*W)
                     
-                    loss = criterion(masks_pred.squeeze(1), true_masks)
+                    # Apply BCE loss
+                    loss = criterion(masks_pred, true_masks_flat)
                     
                     # Add binary Dice loss for better segmentation quality
-                    # Use n_classes=1 for binary segmentation
-                    loss += dice_loss(masks_pred.squeeze(1), true_masks, n_classes=1)
+                    loss += dice_loss(masks_pred, true_masks_flat, n_classes=1)
+                    
+                    # Reshape back for visualization and metrics
+                    masks_pred = masks_pred.view(true_masks.size(0), 1, true_masks.size(1), true_masks.size(2))
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
@@ -457,27 +459,35 @@ def train_point_model(
                 
                 # Compute metrics for logging
                 with torch.no_grad():
-                    # Get predictions
-                    mask_pred = masks_pred.argmax(dim=1)
-                    # Compute Dice score and IoU for each class
-                    dice_scores = compute_dice_per_class(mask_pred, true_masks, n_classes=model.n_classes)
-                    iou_scores = compute_iou_per_class(mask_pred, true_masks, n_classes=model.n_classes)
+                    # Threshold predictions at 0.5 (sigmoid is applied inside the metric)
+                    pred_binary = (torch.sigmoid(masks_pred) > 0.5).float()
+                    
+                    # Compute binary segmentation metrics
+                    intersection = (pred_binary * true_masks.unsqueeze(1)).sum((2, 3))
+                    union = pred_binary.sum((2, 3)) + true_masks.unsqueeze(1).sum((2, 3)) - intersection
+                    
+                    # Compute Dice score: 2*intersection / (sum of areas)
+                    dice = (2. * intersection + 1e-6) / (pred_binary.sum((2, 3)) + true_masks.unsqueeze(1).sum((2, 3)) + 1e-6)
+                    
+                    # Compute IoU: intersection / union
+                    iou = (intersection + 1e-6) / (union + 1e-6)
+                    
+                    dice_mean = dice.mean()
+                    iou_mean = iou.mean()
                 
                 # Log training metrics
                 experiment.log({
                     'train loss': loss.item(),
-                    'train Dice (avg)': dice_scores.mean().item(),
-                    'train IoU (avg)': iou_scores.mean().item(),
-                    **{f'train Dice class {i}': dice_scores[i].item() for i in range(model.n_classes)},
-                    **{f'train IoU class {i}': iou_scores[i].item() for i in range(model.n_classes)},
+                    'train Dice': dice_mean.item(),
+                    'train IoU': iou_mean.item(),
                     'step': global_step,
                     'epoch': epoch
                 })
                 
-                pbar.set_postfix(**{'loss': loss.item(), 'dice': dice_scores.mean().item()})
+                pbar.set_postfix(**{'loss': loss.item(), 'dice': dice_mean.item()})
 
         # Evaluation round
-        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate_point_model(
+        val_dice, val_iou, val_acc = evaluate_point_model(
             model, val_loader, device, amp)
         scheduler.step()
 
@@ -487,8 +497,6 @@ def train_point_model(
             'validation Dice': val_dice,
             'validation IoU': val_iou,
             'validation Accuracy': val_acc,
-            **{f'validation Dice class {i}': val_dice_per_class[i].item() for i in range(model.n_classes)},
-            **{f'validation IoU class {i}': val_iou_per_class[i].item() for i in range(model.n_classes)},
             'epoch': epoch
         })
 
@@ -499,7 +507,7 @@ def train_point_model(
                 "model_state_dict": model.state_dict(),
                 "mask_values": train_set.mask_values
             }
-            torch.save(state_dict, str(dir_checkpoint / 'best_point_model.pth'))
+            torch.save(state_dict, str(dir_checkpoint / 'best_point_model_binary.pth'))
             logging.info(f'New best model saved with dice score: {best_val_dice:.4f}')
 
     return model
@@ -539,6 +547,19 @@ if __name__ == '__main__':
         # For point-based segmentation, we always use binary segmentation (n_classes=1)
         # regardless of what was passed in the command line arguments
         model = PointUNet(n_classes=1, bilinear=args.bilinear)
+        
+        # Initialize weights for better convergence
+        def init_weights(m):
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+        
+        model.apply(init_weights)
+        
         logging.info(f'Network:\n'
                     f'\t4 input channels (3 RGB + 1 point heatmap)\n'
                     f'\t1 output channel (binary segmentation)\n'
