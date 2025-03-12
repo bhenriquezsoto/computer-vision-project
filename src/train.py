@@ -235,7 +235,7 @@ def train_model(
 
             # Perform validation at the end of each epoch
             val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(
-                model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes
+                model, val_loader, device, amp, n_classes=model.n_classes
             )
             
             # Update scheduler (if using ReduceLROnPlateau)
@@ -461,8 +461,8 @@ def train_point_model(
                 pbar.set_postfix(**{'loss': loss.item(), 'dice': dice_scores.mean().item()})
 
         # Evaluation round
-        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(
-            model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes
+        val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate_point_model(
+            model, val_loader, device, amp, n_classes=model.n_classes
         )
         scheduler.step()
 

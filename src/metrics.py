@@ -76,7 +76,7 @@ def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float 
 
 
 @torch.inference_mode()
-def compute_metrics(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validation round'):
+def compute_metrics(net, dataloader, device, amp, n_classes=3, desc='Validation round'):
     """
     Computes metrics for a model on a dataset.
 

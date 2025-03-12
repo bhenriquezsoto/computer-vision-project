@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from PIL import Image
 from multiprocessing import Pool
-from os.path import splitext, isfile, join
+from os.path import splitext
 from pathlib import Path
 from torch.utils.data import Dataset
 import albumentations as A
@@ -238,7 +238,6 @@ class PointSegmentationDataset(Dataset):
         y = np.arange(0, height, 1, float)
         x = np.arange(0, width, 1, float)
         y, x = np.meshgrid(y, x)
-        
         # Generate 2D gaussian
         heatmap = np.exp(-((x - center_x) ** 2 + (y - center_y) ** 2) / (2 * self.sigma ** 2))
         return heatmap
@@ -271,10 +270,13 @@ class PointSegmentationDataset(Dataset):
             
         # Randomly select either cat (1) or dog (2)
         available_classes = []
+        if 0 in mask:
+            available_classes.append(0)
         if 1 in mask:  # Check if cat exists
             available_classes.append(1)
         if 2 in mask:  # Check if dog exists
             available_classes.append(2)
+
             
         if not available_classes:
             raise ValueError(f"No cat or dog found in mask {mask_file}")
@@ -287,11 +289,11 @@ class PointSegmentationDataset(Dataset):
         # Create point heatmap
         heatmap = self.generate_gaussian_heatmap(point_y, point_x, mask.shape[0], mask.shape[1])
         
-        # Create binary mask for the target class
+        # Create binary mask: 1 for target class, 0 for everything else
         binary_mask = (mask == target_class).astype(np.float32)
         
-        # Apply preprocessing to image, heatmap, and binary mask
-        img, mask, original_mask = preprocessing(img, binary_mask, mode='train', dim=self.dim)
+        # Apply preprocessing to image and binary mask
+        img, mask, _ = preprocessing(img, binary_mask, mode='train', dim=self.dim)
         
         # Convert heatmap to tensor and resize to match preprocessed image
         heatmap_tensor = torch.from_numpy(heatmap).float()
@@ -306,6 +308,7 @@ class PointSegmentationDataset(Dataset):
         return {
             'image': img,  # Shape: (3, H, W)
             'point_heatmap': heatmap_tensor,  # Shape: (1, H, W)
-            'mask': mask  # Shape: (H, W)
+            'mask': mask,  # Shape: (H, W) - binary mask (0 for background, 1 for target class)
+            'target_class': target_class  # Add target class for reference
         }
 
