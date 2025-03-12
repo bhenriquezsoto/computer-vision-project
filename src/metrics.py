@@ -177,6 +177,8 @@ def evaluate_point_model(model, dataloader, device, amp, n_classes=3, desc='Vali
             image = batch['image']
             point_heatmap = batch['point_heatmap']
             true_mask = batch['mask']
+            # Get clicked class if available (for debugging)
+            clicked_class = batch.get('clicked_class', None)
             
             # Move to device
             image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)

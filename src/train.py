@@ -415,6 +415,7 @@ def train_point_model(
                 images = batch['image']
                 point_heatmaps = batch['point_heatmap']
                 true_masks = batch['mask']
+                clicked_class = batch['clicked_class'] if 'clicked_class' in batch else None  # Get the clicked class if available
 
                 assert images.shape[1] == 3, \
                     f'Network has 3 input channels, but got {images.shape[1]} channels.'
@@ -422,10 +423,16 @@ def train_point_model(
                 images = images.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
                 point_heatmaps = point_heatmaps.to(device=device, dtype=torch.float32)
                 true_masks = true_masks.to(device=device, dtype=torch.long)  # Long tensor for CrossEntropyLoss
+                if clicked_class is not None:
+                    clicked_class = clicked_class.to(device=device)
 
                 with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
                     masks_pred = model(images, point_heatmaps)
-                    loss = criterion(masks_pred, true_masks)  # CrossEntropyLoss expects (B, C, H, W) and (B, H, W)
+                    
+                    # Standard cross entropy loss for multi-class segmentation
+                    loss = criterion(masks_pred, true_masks)
+                    
+                    # Add Dice loss for better segmentation quality
                     loss += dice_loss(masks_pred, true_masks, n_classes=model.n_classes)
 
                 optimizer.zero_grad(set_to_none=True)

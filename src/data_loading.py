@@ -233,13 +233,25 @@ class PointSegmentationDataset(Dataset):
         self.mask_values = list(sorted(np.unique(np.concatenate(unique), axis=0).tolist()))
         logging.info(f'Unique mask values: {self.mask_values}')
 
-    def generate_gaussian_heatmap(self, center_y: int, center_x: int, height: int, width: int) -> np.ndarray:
-        """Generate a Gaussian heatmap centered at (center_y, center_x)."""
+    def generate_gaussian_heatmap(self, center_y: int, center_x: int, height: int, width: int, bg_emphasis: bool = False) -> np.ndarray:
+        """Generate a Gaussian heatmap centered at (center_y, center_x).
+        
+        Args:
+            center_y: Y-coordinate of center point
+            center_x: X-coordinate of center point
+            height: Height of output heatmap
+            width: Width of output heatmap
+            bg_emphasis: If True, use wider sigma for background points to emphasize larger regions
+        """
         y = np.arange(0, height, 1, float)
         x = np.arange(0, width, 1, float)
         y, x = np.meshgrid(y, x)
+        
+        # Use larger sigma for background points to emphasize larger regions
+        sigma = self.sigma * 1.5 if bg_emphasis else self.sigma
+        
         # Generate 2D gaussian
-        heatmap = np.exp(-((x - center_x) ** 2 + (y - center_y) ** 2) / (2 * self.sigma ** 2))
+        heatmap = np.exp(-((x - center_x) ** 2 + (y - center_y) ** 2) / (2 * sigma ** 2))
         return heatmap
 
     def sample_point_from_mask(self, mask: np.ndarray, target_class: int) -> tuple[int, int]:
@@ -267,8 +279,8 @@ class PointSegmentationDataset(Dataset):
         
         assert img.shape[:2] == mask.shape[:2], \
             f'Image and mask {img_file}, {mask_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
-            
-        # Randomly select either cat (1) or dog (2)
+        
+        # Randomly select a class to sample a point from: background (0), cat (1) or dog (2)
         available_classes = []
         if 0 in mask:
             available_classes.append(0)
@@ -276,24 +288,27 @@ class PointSegmentationDataset(Dataset):
             available_classes.append(1)
         if 2 in mask:  # Check if dog exists
             available_classes.append(2)
-
             
         if not available_classes:
-            raise ValueError(f"No cat or dog found in mask {mask_file}")
+            raise ValueError(f"No classes found in mask {mask_file}")
             
-        target_class = np.random.choice(available_classes)
+        clicked_class = np.random.choice(available_classes)
         
         # Sample a random point from the selected class region
-        point_y, point_x = self.sample_point_from_mask(mask, target_class)
+        point_y, point_x = self.sample_point_from_mask(mask, clicked_class)
         
-        # Create point heatmap
-        heatmap = self.generate_gaussian_heatmap(point_y, point_x, mask.shape[0], mask.shape[1])
+        # Create point heatmap - use wider heatmap for background clicks
+        is_background = (clicked_class == 0)
+        heatmap = self.generate_gaussian_heatmap(point_y, point_x, 
+                                            mask.shape[0], mask.shape[1], 
+                                            bg_emphasis=is_background)
         
-        # Create binary mask: 1 for target class, 0 for everything else
-        binary_mask = (mask == target_class).astype(np.float32)
+        # Keep the original mask instead of converting to binary
+        # This allows the model to learn multi-class segmentation
+        # The loss function will use the clicked_class information to guide the learning
         
-        # Apply preprocessing to image and binary mask
-        img, mask, _ = preprocessing(img, binary_mask, mode='train', dim=self.dim)
+        # Apply preprocessing to image and mask
+        img, processed_mask, original_mask = preprocessing(img, mask, mode='train', dim=self.dim)
         
         # Convert heatmap to tensor and resize to match preprocessed image
         heatmap_tensor = torch.from_numpy(heatmap).float()
@@ -308,7 +323,7 @@ class PointSegmentationDataset(Dataset):
         return {
             'image': img,  # Shape: (3, H, W)
             'point_heatmap': heatmap_tensor,  # Shape: (1, H, W)
-            'mask': mask,  # Shape: (H, W) - binary mask (0 for background, 1 for target class)
-            'target_class': target_class  # Add target class for reference
+            'mask': processed_mask,  # Shape: (H, W) - multi-class mask (0, 1, 2)
+            'clicked_class': clicked_class  # The class that was clicked
         }
 
