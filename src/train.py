@@ -21,6 +21,7 @@ from models.unet_model import UNet, PointUNet
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
 from data_loading import SegmentationDataset, TestSegmentationDataset, sort_and_match_files, PointSegmentationDataset, TestPointSegmentationDataset, calculate_class_weights
+from losses import adaptive_focal_loss, adaptive_focal_loss_multi_class
 
 
 dir_img = Path('Dataset/TrainVal/color')
@@ -133,9 +134,12 @@ def train_model(
     else:
         raise ValueError(f"Unsupported optimizer: {args.optimizer}")
 
-    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)  # or ReduceLROnPlateau(optimizer, mode='max', patience=5)
+    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
     grad_scaler = GradScaler(enabled=amp)
-    criterion = nn.CrossEntropyLoss(ignore_index=255, weight=class_weights) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
+    
+    # Use Adaptive Focal Loss instead of CrossEntropyLoss
+    criterion = adaptive_focal_loss_multi_class if model.n_classes > 1 else adaptive_focal_loss
+    
     global_step = 0
     best_val_iou = 0
     best_val_iou_after_epoch_10 = 0
@@ -145,9 +149,8 @@ def train_model(
         model.train()
         epoch_loss = 0
         
-        
-        total_dice = torch.zeros(model.n_classes, device=device)  # Store per-class Dice
-        total_iou = torch.zeros(model.n_classes, device=device)   # Store per-class IoU
+        total_dice = torch.zeros(model.n_classes, device=device)
+        total_iou = torch.zeros(model.n_classes, device=device)
         total_acc = 0  
         
         with tqdm(total=len(train_set), desc=f'Epoch {epoch}/{epochs}', unit='img', leave=True) as pbar:
@@ -162,13 +165,12 @@ def train_model(
                         # Forward pass with additional point input
                         masks_pred = model(images, points)
                         
-                        # Loss calculation
+                        # Loss calculation using Adaptive Focal Loss
                         if model.n_classes == 1:
-                            loss = criterion(masks_pred.squeeze(1), true_masks.float())
+                            loss = criterion(masks_pred.squeeze(1), true_masks.float(), len(images))
                             loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
                         else:
-                            # Don't modify the true_masks - the CrossEntropyLoss with ignore_index=255 will handle void pixels
-                            loss = criterion(masks_pred, true_masks)
+                            loss = criterion(masks_pred, true_masks, len(images))
                             # For dice loss, we still need to exclude void pixels
                             mask_for_dice = true_masks.clone()
                             loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255)
@@ -195,8 +197,8 @@ def train_model(
                                     model.set_phase("segmentation")
                                 
                                 masks_pred = model(images)
-                                # Segmentation loss with class weights
-                                loss = criterion(masks_pred, true_masks)
+                                # Segmentation loss with Adaptive Focal Loss
+                                loss = criterion(masks_pred, true_masks, len(images))
                                 # For dice loss, we still need to exclude void pixels
                                 mask_for_dice = true_masks.clone()
                                 loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255)
@@ -204,11 +206,10 @@ def train_model(
                             # Standard training for other models
                             masks_pred = model(images)
                             if model.n_classes == 1:
-                                loss = criterion(masks_pred.squeeze(1), true_masks.float())
+                                loss = criterion(masks_pred.squeeze(1), true_masks.float(), len(images))
                                 loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
                             else:
-                                # Don't modify the true_masks - the CrossEntropyLoss with ignore_index=255 will handle void pixels
-                                loss = criterion(masks_pred, true_masks)
+                                loss = criterion(masks_pred, true_masks, len(images))
                                 # For dice loss, we still need to exclude void pixels
                                 mask_for_dice = true_masks.clone()
                                 loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255)
