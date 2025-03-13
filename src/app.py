@@ -152,7 +152,7 @@ def click_and_predict(image, evt: gr.SelectData, model, device, dim=256):
 
 def create_gradio_interface():
     # Settings
-    model_path = "weights/best_model_sparkling-only-afl.pth"  # Update with your actual model path
+    model_path = "weights/best_model_after_epoch_10_swept-fire-9_weighted.pth"
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     dim = 256
     
