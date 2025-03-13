@@ -78,8 +78,8 @@ def train_model(
     is_point_model = hasattr(model, 'is_point_model') and model.is_point_model
     
     if is_point_model:
-        train_set = PointSegmentationDataset(train_images, train_masks, dim=img_dim)
-        val_set = TestPointSegmentationDataset(val_images, val_masks, dim=img_dim)
+        train_set = PointSegmentationDataset(train_images, train_masks, dim=img_dim, class_weights=class_weights.cpu().numpy().tolist() if class_weights is not None else None)
+        val_set = TestPointSegmentationDataset(val_images, val_masks, dim=img_dim, class_weights=class_weights.cpu().numpy().tolist() if class_weights is not None else None)
     else:
         train_set = SegmentationDataset(train_images, train_masks, dim=img_dim)
         val_set = TestSegmentationDataset(val_images, val_masks, dim=img_dim)
@@ -207,8 +207,8 @@ def train_model(
                             true_masks_processed = true_masks.clone()
                             true_masks_processed[true_masks_processed == 255] = 0
                             
-                            # Add dice loss as a complementary loss with a weight of 0.5
-                            loss += 0.8 * dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
+                            # Add dice loss as a complementary loss with a higher weight for better class balancing
+                            loss += 1.2 * dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
                     else:
                         # Standard training for other models
                         masks_pred = model(images)

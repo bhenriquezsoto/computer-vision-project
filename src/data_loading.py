@@ -283,11 +283,12 @@ def generate_point_heatmap(mask, sigma=10, mode='random', class_weights=None):
     unique_values = np.unique(mask)
     valid_classes = [val for val in unique_values if val != 255]
     
-    if len(valid_classes) == 0:  # No classes found (shouldn't happen)
-        # Fallback: use the center of the image
-        height, width = mask.shape
-        x, y = width // 2, height // 2
-        
+    # Check specifically for cats (class 1)
+    has_cat = 1 in valid_classes
+    
+    # Give higher priority to cats when present
+    if has_cat and random.random() < 0.7:  # 70% chance to select cat when present
+        selected_class = 1
     elif mode == 'weighted' and class_weights is not None:
         # Use class weights to determine sampling probabilities
         # Weight sampling toward underrepresented classes
@@ -363,9 +364,9 @@ class PointSegmentationDataset(SegmentationDataset):
         self.sigma = sigma
         self.point_mode = point_mode
         
-        # Default weights give more emphasis to dogs (class 2) which shows lower performance
+        # Set default weights that prioritize cat class (class 1)
         if class_weights is None:
-            self.class_weights = [0.5, 0.8, 1.2]  # Background, Cat, Dog - more emphasis on dogs
+            self.class_weights = [0.5, 2.0, 0.8]  # Background, Cat, Dog - more emphasis on cats
         else:
             self.class_weights = class_weights
             
@@ -415,9 +416,9 @@ class TestPointSegmentationDataset(TestSegmentationDataset):
         self.sigma = sigma
         self.point_mode = point_mode
         
-        # Default weights give more emphasis to dogs (class 2) which shows lower performance
+        # Set default weights that prioritize cat class (class 1)
         if class_weights is None:
-            self.class_weights = [0.5, 0.8, 1.2]  # Background, Cat, Dog - much more emphasis on dogs
+            self.class_weights = [0.5, 2.0, 0.8]  # Background, Cat, Dog - more emphasis on cats
         else:
             self.class_weights = class_weights
             
