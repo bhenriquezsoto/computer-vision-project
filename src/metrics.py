@@ -148,3 +148,100 @@ def compute_metrics(net, dataloader, device, amp, dim = 256, n_classes=3, desc='
     mean_acc = total_acc / num_batches
 
     return mean_dice, mean_iou, mean_acc, total_dice / num_batches, total_iou / num_batches
+
+
+def sigmoid_adaptive_focal_loss(inputs, targets, num_masks, epsilon: float = 0.5, gamma: float = 2,
+                                delta: float = 0.4, alpha: float = 1.0, eps: float = 1e-12):
+    """
+    Adaptive Focal Loss from AdaptiveClick paper for binary segmentation.
+    
+    Args:
+        inputs: A float tensor of arbitrary shape.
+                The predictions for each example.
+        targets: A float tensor with the same shape as inputs. Stores the binary
+                 classification label for each element in inputs
+                (0 for the negative class and 1 for the positive class).
+        num_masks: Number of masks (usually batch size)
+        epsilon: (optional) Weighting factor in range (0,1) to balance
+                positive vs negative examples. Default = 0.5.
+        gamma: Exponent of the modulating factor (1 - p_t) to
+               balance easy vs hard examples.
+        delta: A Factor in range (0,1) to estimate the gap between the term of ∇B
+                and the gradient term of bce loss.
+        alpha: A coefficient of poly loss.
+        eps: Term added to the denominator to improve numerical stability.
+    Returns:
+        Loss tensor
+    """
+    prob = inputs.sigmoid()
+    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    p_t = prob * targets + (1 - prob) * (1 - targets)
+
+    one_hot = targets > 0.5
+    with torch.no_grad():
+        p_sum = torch.sum(torch.where(one_hot, p_t, 0), dim=-1, keepdim=True)
+        ps_sum = torch.sum(torch.where(one_hot, 1, 0), dim=-1, keepdim=True)
+        gamma = gamma + (1 - (p_sum / (ps_sum + eps)))
+
+    beta = (1 - p_t) ** gamma
+
+    with torch.no_grad():
+        sw_sum = torch.sum(torch.ones(p_t.shape, device=p_t.device), dim=-1, keepdim=True)
+        beta_sum = (1 + delta * gamma) * torch.sum(beta, dim=-1, keepdim=True) + eps
+        mult = sw_sum / beta_sum
+
+    loss = mult * ce_loss * beta + alpha * (1 - p_t) ** (gamma + 1)
+
+    if epsilon >= 0:
+        epsilon_t = epsilon * targets + (1 - epsilon) * (1 - targets)
+        loss = epsilon_t * loss
+
+    return loss.mean(1).sum() / num_masks
+
+
+def adaptive_focal_loss_multiclass(inputs, targets, num_masks, epsilon: float = 0.5, gamma: float = 2,
+                          delta: float = 0.4, alpha: float = 1.0, eps: float = 1e-12):
+    """
+    Multi-class version of Adaptive Focal Loss.
+    
+    Args:
+        inputs: A float tensor of shape (B, C, H, W) with class logits
+        targets: A long tensor of shape (B, H, W) with class indices
+        num_masks: Number of masks (usually batch size)
+        epsilon, gamma, delta, alpha, eps: Same as in sigmoid_adaptive_focal_loss
+        
+    Returns:
+        Loss tensor
+    """
+    # Get number of classes from inputs
+    n_classes = inputs.shape[1]
+    
+    # One-hot encode targets (ignore void label 255)
+    valid_mask = targets != 255
+    targets_valid = targets.clone()
+    targets_valid[~valid_mask] = 0  # Set invalid pixels to background
+    targets_one_hot = F.one_hot(targets_valid, num_classes=n_classes).permute(0, 3, 1, 2).float()  # (B, C, H, W)
+    
+    # Calculate class-wise binary losses
+    total_loss = torch.tensor(0.0, device=inputs.device)
+    
+    for cls in range(n_classes):
+        # Extract logits and targets for this class
+        cls_logits = inputs[:, cls]  # (B, H, W)
+        cls_targets = targets_one_hot[:, cls]  # (B, H, W)
+        
+        # Apply valid mask to both logits and targets
+        mask_flat = valid_mask.view(valid_mask.size(0), -1)  # (B, H*W)
+        cls_logits_flat = cls_logits.view(cls_logits.size(0), -1)  # (B, H*W)
+        cls_targets_flat = cls_targets.view(cls_targets.size(0), -1)  # (B, H*W)
+        
+        # Apply the loss only on valid pixels
+        cls_loss = sigmoid_adaptive_focal_loss(
+            cls_logits_flat, cls_targets_flat, num_masks,
+            epsilon=epsilon, gamma=gamma, delta=delta, alpha=alpha, eps=eps
+        )
+        
+        total_loss += cls_loss
+    
+    # Return average loss across classes
+    return total_loss / n_classes

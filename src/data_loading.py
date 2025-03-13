@@ -15,6 +15,7 @@ from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
 import cv2
 import random
+import torch.nn.functional as F
 
     
 def load_image(filename, is_mask=False):
@@ -381,11 +382,22 @@ class TestPointSegmentationDataset(TestSegmentationDataset):
         # Generate a point and heatmap
         (x, y), heatmap = generate_point_heatmap(mask_np, self.sigma, self.point_mode)
         
-        # Convert heatmap to tensor
-        point_tensor = torch.from_numpy(heatmap).float().unsqueeze(0)
+        # Resize heatmap to match the image dimensions
+        # This is critical because the image might have been resized in preprocessing
+        heatmap_tensor = torch.from_numpy(heatmap).float().unsqueeze(0)
+        
+        # Ensure the heatmap has the same spatial dimensions as the image
+        # The image should be (C, H, W) where H and W are both self.dim
+        if heatmap_tensor.shape[-2:] != (self.dim, self.dim):
+            heatmap_tensor = F.interpolate(
+                heatmap_tensor.unsqueeze(0),  # Add batch dimension
+                size=(self.dim, self.dim),
+                mode='bilinear',
+                align_corners=False
+            ).squeeze(0)  # Remove batch dimension
         
         # Add point and heatmap to result
-        result['point'] = point_tensor
+        result['point'] = heatmap_tensor
         result['point_coords'] = torch.tensor([x, y])
         
         return result
