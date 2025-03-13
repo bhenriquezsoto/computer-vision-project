@@ -145,6 +145,9 @@ def train_model(
         total_iou = torch.zeros(model.n_classes, device=device)   # Store per-class IoU
         total_acc = 0  
         
+        # Track number of batches each class appears in for proper averaging
+        class_batch_count = torch.zeros(model.n_classes, device=device, dtype=torch.float32)
+
         with tqdm(total=len(train_set), desc=f'Epoch {epoch}/{epochs}', unit='img', leave=True) as pbar:
             for batch in train_loader:
                 images, true_masks = batch['image'], batch['mask']
@@ -229,25 +232,46 @@ def train_model(
                 
                 # Skip metrics during reconstruction phase of autoencoder
                 if not (isinstance(model, Autoencoder) and model.training_phase == "reconstruction"):
-                    dice_scores = compute_dice_per_class(masks_pred.argmax(dim=1), true_masks_processed, n_classes=model.n_classes)
-                    iou_scores = compute_iou_per_class(masks_pred.argmax(dim=1), true_masks_processed, n_classes=model.n_classes)
-                    pixel_acc = compute_pixel_accuracy(masks_pred.argmax(dim=1), true_masks_processed)
+                    # Handle void labels
+                    true_masks_for_metrics = true_masks.clone()
+                    true_masks_for_metrics[true_masks_for_metrics == 255] = 0  # Treat void label as background
+                    
+                    # Calculate metrics
+                    dice_scores = compute_dice_per_class(masks_pred.argmax(dim=1), true_masks_for_metrics, n_classes=model.n_classes)
+                    iou_scores = compute_iou_per_class(masks_pred.argmax(dim=1), true_masks_for_metrics, n_classes=model.n_classes)
+                    pixel_acc = compute_pixel_accuracy(masks_pred.argmax(dim=1), true_masks_for_metrics)
 
-                    total_dice += dice_scores
-                    total_iou += iou_scores
+                    # Check if each class is present in this batch (to avoid skewing metrics)
+                    class_present = torch.zeros(model.n_classes, device=device, dtype=torch.bool)
+                    for cls in range(model.n_classes):
+                        class_present[cls] = (true_masks_for_metrics == cls).any()
+                    
+                    # Only accumulate metrics for classes that are present
+                    total_dice += torch.where(class_present, dice_scores, torch.zeros_like(dice_scores))
+                    total_iou += torch.where(class_present, iou_scores, torch.zeros_like(iou_scores))
+                    
+                    # Track number of batches each class appears in for proper averaging
+                    class_batch_count += class_present.float()
+                    
                     total_acc += pixel_acc
 
                     # Log training metrics
-                    experiment.log({
+                    metrics_log = {
                         'train loss': loss.item(),
                         'train Dice (avg)': dice_scores.mean().item(),
                         'train IoU (avg)': iou_scores.mean().item(),
                         'train Pixel Accuracy': pixel_acc,
-                        **{f'train Dice class {i}': dice_scores[i].item() for i in range(model.n_classes)},
-                        **{f'train IoU class {i}': iou_scores[i].item() for i in range(model.n_classes)},
                         'step': global_step,
                         'epoch': epoch
-                    })
+                    }
+                    
+                    # Add per-class metrics only for classes present in the batch
+                    for i in range(model.n_classes):
+                        if class_present[i]:
+                            metrics_log[f'train Dice class {i}'] = dice_scores[i].item()
+                            metrics_log[f'train IoU class {i}'] = iou_scores[i].item()
+                    
+                    experiment.log(metrics_log)
                     
                     pbar.set_postfix(loss=f"{loss.item():.4f}", dice=f"{dice_scores.mean().item():.4f}", iou=f"{iou_scores.mean().item():.4f}")
                 else:
@@ -262,12 +286,20 @@ def train_model(
 
         # Compute average training metrics
         if not (isinstance(model, Autoencoder) and model.training_phase == "reconstruction"):
-            avg_dice = total_dice / len(train_loader)
-            avg_iou = total_iou / len(train_loader)
+            # Avoid division by zero for classes that never appeared in any batch
+            class_batch_count = torch.maximum(class_batch_count, torch.ones_like(class_batch_count))
+            
+            # Calculate proper per-class averages
+            avg_dice = total_dice / class_batch_count.unsqueeze(1)
+            avg_iou = total_iou / class_batch_count.unsqueeze(1)
             avg_acc = total_acc / len(train_loader)
             epoch_loss /= len(train_loader)
 
             logging.info(f"Epoch {epoch} - Training Loss: {epoch_loss:.4f}, Dice Score: {avg_dice.mean().item():.4f}, IoU: {avg_iou.mean().item():.4f}, Pixel Acc: {avg_acc:.4f}")
+            
+            # Log per-class metrics
+            for i in range(model.n_classes):
+                logging.info(f"  Class {i} - Dice: {avg_dice[i].item():.4f}, IoU: {avg_iou[i].item():.4f}")
 
             # Perform validation at the end of each epoch
             val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(

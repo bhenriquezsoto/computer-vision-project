@@ -266,28 +266,54 @@ def sort_and_match_files(images, masks):
     return matched_images, matched_masks
 
 # Add a new function to generate a point heatmap
-def generate_point_heatmap(mask, sigma=10, mode='random'):
+def generate_point_heatmap(mask, sigma=10, mode='random', class_weights=None):
     """
-    Generate a point heatmap for a mask.
+    Generate a point heatmap for a mask with improved class sampling.
     
     Args:
         mask (np.ndarray): Segmentation mask
         sigma (int): Standard deviation for Gaussian kernel
-        mode (str): Point selection mode ('random', 'center')
+        mode (str): Point selection mode ('random', 'center', 'weighted')
+        class_weights (list, optional): Weights for class sampling probabilities
     
     Returns:
         tuple: (x, y) coordinates of the point and heatmap
     """
-    # Get unique class values excluding background (0) and void label (255)
+    # Get unique class values excluding void label (255)
     unique_values = np.unique(mask)
-    valid_classes = [val for val in unique_values if val not in [0, 255]]
+    valid_classes = [val for val in unique_values if val != 255]
     
-    if len(valid_classes) == 0:  # No foreground classes found
-        # In this case, pick a point from the background
-        valid_classes = [0]
-    
-    # Randomly select a class to pick a point from
-    selected_class = random.choice(valid_classes)
+    if len(valid_classes) == 0:  # No classes found (shouldn't happen)
+        # Fallback: use the center of the image
+        height, width = mask.shape
+        x, y = width // 2, height // 2
+        
+    elif mode == 'weighted' and class_weights is not None:
+        # Use class weights to determine sampling probabilities
+        # Weight sampling toward underrepresented classes
+        class_probs = {}
+        for cls in valid_classes:
+            # Use inverse frequency as weight (modified by provided class_weights)
+            if cls < len(class_weights):  # Ensure class has a weight defined
+                cls_weight = class_weights[cls]
+                class_probs[cls] = cls_weight
+        
+        # Normalize probabilities
+        total = sum(class_probs.values())
+        if total > 0:
+            for cls in class_probs:
+                class_probs[cls] /= total
+                
+            # Select class based on weighted probability
+            classes = list(class_probs.keys())
+            probs = [class_probs[cls] for cls in classes]
+            selected_class = np.random.choice(classes, p=probs)
+        else:
+            # Fallback to random selection
+            selected_class = random.choice(valid_classes)
+    else:
+        # Standard random selection
+        selected_class = random.choice(valid_classes)
     
     # Get coordinates of pixels belonging to the selected class
     y_indices, x_indices = np.where(mask == selected_class)
@@ -301,7 +327,7 @@ def generate_point_heatmap(mask, sigma=10, mode='random'):
             # Use the center of mass of the selected class
             y = int(np.mean(y_indices))
             x = int(np.mean(x_indices))
-        else:  # 'random'
+        else:  # 'random' or 'weighted'
             # Randomly select a point from the selected class
             idx = random.randint(0, len(y_indices) - 1)
             y, x = y_indices[idx], x_indices[idx]
@@ -322,18 +348,28 @@ class PointSegmentationDataset(SegmentationDataset):
     Segmentation dataset that includes point prompts.
     
     Args:
-        images (list[str]): List of image filenames
-        masks (list[str]): List of mask filenames
-        mask_suffix (str): Suffix for mask filenames
-        dim (int): Image dimension
-        sigma (int): Standard deviation for Gaussian kernel
-        point_mode (str): Mode for selecting points ('random', 'center')
+        images: List of image file paths
+        masks: List of mask file paths
+        mask_suffix: Suffix for mask files
+        dim: Image dimension for resizing
+        sigma: Standard deviation for Gaussian kernel
+        point_mode: Point selection mode ('random', 'center', 'weighted')
+        class_weights: Weights for class sampling probabilities
     """
     def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', 
-                 dim: int = 256, sigma: int = 10, point_mode: str = 'random'):
+                 dim: int = 256, sigma: int = 10, point_mode: str = 'weighted',
+                 class_weights=None):
         super().__init__(images, masks, mask_suffix, dim)
         self.sigma = sigma
         self.point_mode = point_mode
+        
+        # Default weights give more emphasis to dogs (class 2) which shows lower performance
+        if class_weights is None:
+            self.class_weights = [0.5, 0.8, 1.2]  # Background, Cat, Dog - more emphasis on dogs
+        else:
+            self.class_weights = class_weights
+            
+        logging.info(f"PointSegmentationDataset initialized with class weights: {self.class_weights}")
         
     def __getitem__(self, idx):
         result = super().__getitem__(idx)
@@ -342,8 +378,13 @@ class PointSegmentationDataset(SegmentationDataset):
         # Convert mask back to numpy for point generation
         mask_np = mask.numpy().astype(np.uint8)
         
-        # Generate a point and heatmap
-        (x, y), heatmap = generate_point_heatmap(mask_np, self.sigma, self.point_mode)
+        # Generate a point and heatmap with class weights, using weighted mode
+        (x, y), heatmap = generate_point_heatmap(
+            mask_np, 
+            self.sigma, 
+            mode=self.point_mode, 
+            class_weights=self.class_weights
+        )
         
         # Convert heatmap to tensor
         point_tensor = torch.from_numpy(heatmap).float().unsqueeze(0)
@@ -359,18 +400,28 @@ class TestPointSegmentationDataset(TestSegmentationDataset):
     Test dataset for point-based segmentation.
     
     Args:
-        images (list[str]): List of image filenames
-        masks (list[str]): List of mask filenames
-        mask_suffix (str): Suffix for mask filenames
-        dim (int): Image dimension
-        sigma (int): Standard deviation for Gaussian kernel
-        point_mode (str): Mode for selecting points ('random', 'center')
+        images: List of image file paths
+        masks: List of mask file paths
+        mask_suffix: Suffix for mask files
+        dim: Image dimension for resizing
+        sigma: Standard deviation for Gaussian kernel
+        point_mode: Point selection mode ('random', 'center', 'weighted')
+        class_weights: Weights for class sampling probabilities
     """
     def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', 
-                 dim: int = 256, sigma: int = 10, point_mode: str = 'random'):
+                 dim: int = 256, sigma: int = 10, point_mode: str = 'weighted',
+                 class_weights=None):
         super().__init__(images, masks, mask_suffix, dim)
         self.sigma = sigma
         self.point_mode = point_mode
+        
+        # Default weights give more emphasis to dogs (class 2) which shows lower performance
+        if class_weights is None:
+            self.class_weights = [0.5, 0.8, 2.0]  # Background, Cat, Dog - more emphasis on dogs
+        else:
+            self.class_weights = class_weights
+            
+        logging.info(f"TestPointSegmentationDataset initialized with class weights: {self.class_weights}")
         
     def __getitem__(self, idx):
         result = super().__getitem__(idx)
@@ -379,8 +430,13 @@ class TestPointSegmentationDataset(TestSegmentationDataset):
         # Convert mask to numpy for point generation
         mask_np = mask.numpy().astype(np.uint8)
         
-        # Generate a point and heatmap
-        (x, y), heatmap = generate_point_heatmap(mask_np, self.sigma, self.point_mode)
+        # Generate a point and heatmap with class weights
+        (x, y), heatmap = generate_point_heatmap(
+            mask_np, 
+            self.sigma, 
+            mode=self.point_mode, 
+            class_weights=self.class_weights
+        )
         
         # Resize heatmap to match the image dimensions
         # This is critical because the image might have been resized in preprocessing
