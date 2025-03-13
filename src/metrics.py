@@ -17,7 +17,7 @@ def compute_dice_per_class(pred: Tensor, target: Tensor, n_classes: int = 3, eps
 
         dice_scores[cls] = dice
 
-    return dice_scores 
+    return dice_scores
 
 
 def compute_iou_per_class(pred: Tensor, target: Tensor, n_classes: int = 3, epsilon: float = 1e-6):
@@ -139,79 +139,3 @@ def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float 
         
         # Return weighted mean Dice loss across all classes
         return 1 - torch.mean(dice_scores)
-
-
-@torch.inference_mode()
-def compute_metrics(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validation round'):
-    """
-    Computes metrics for a model on a dataset.
-
-    Returns:
-    - Mean Dice Score
-    - Mean IoU
-    - Mean Pixel Accuracy
-    - Per-class Dice Scores
-    - Per-class IoU Scores
-    """
-    net.eval()
-    num_batches = len(dataloader)
-    
-    # Check if we're evaluating an autoencoder in reconstruction phase
-    is_autoencoder_reconstruction = hasattr(net, 'training_phase') and net.training_phase == 'reconstruction'
-    
-    # If we're in reconstruction phase, return dummy metrics and skip evaluation
-    if is_autoencoder_reconstruction:
-        dummy_metrics = torch.zeros(n_classes, device=device)
-        return 0.0, 0.0, 0.0, dummy_metrics, dummy_metrics
-
-    total_dice = torch.zeros(n_classes, device=device)
-    total_iou = torch.zeros(n_classes, device=device)
-    total_acc = 0
-
-    # iterate over the validation set
-    with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
-        for batch in tqdm(dataloader, total=num_batches, desc=desc, unit='batch', leave=False):        
-            image, mask_true = batch['image'], batch['mask']
-            
-            # Get original size from the mask
-            original_size = mask_true.shape[-2:]
-        
-            # Move to correct device
-            image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
-            mask_true = mask_true.to(device=device, dtype=torch.long)
-
-            # Predict masks
-            mask_pred = net(image)
-            mask_pred = mask_pred.argmax(dim=1)  # Convert to class indices
-            
-            # Resize masks to original size
-            mask_pred = F.interpolate(mask_pred.unsqueeze(1).float(), size=original_size, mode='nearest').long().squeeze(1)
-
-            # Create a mask to identify void pixels (255)
-            void_pixels = mask_true == 255
-            
-            # For metrics calculation, create a mask that excludes void pixels
-            metrics_mask = mask_true.clone()
-            
-            # Set void pixels in the metrics mask to match the prediction
-            # This effectively ignores these pixels in the metrics calculation
-            metrics_mask[void_pixels] = mask_pred[void_pixels]
-
-            # Compute Dice Score, IoU, and Pixel Accuracy
-            dice_scores = compute_dice_per_class(mask_pred, metrics_mask, n_classes=n_classes)
-            iou_scores = compute_iou_per_class(mask_pred, metrics_mask, n_classes=n_classes)
-            pixel_acc = compute_pixel_accuracy(mask_pred, metrics_mask)
-
-            # Accumulate results
-            total_dice += dice_scores
-            total_iou += iou_scores
-            total_acc += pixel_acc
-
-    net.train()
-
-    # Compute mean metrics
-    mean_dice = total_dice.mean().item() / num_batches
-    mean_iou = total_iou.mean().item() / num_batches
-    mean_acc = total_acc / num_batches
-
-    return mean_dice, mean_iou, mean_acc, total_dice / num_batches, total_iou / num_batches

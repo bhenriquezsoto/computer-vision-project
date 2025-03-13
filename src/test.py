@@ -3,15 +3,13 @@ import logging
 import os
 from pathlib import Path
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from metrics import compute_metrics
+from eval_utils import evaluate_segmentation
 from models.unet_model import UNet, PointUNet
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
 from data_loading import TestSegmentationDataset, sort_and_match_files, TestPointSegmentationDataset
-from eval_utils import validate_point_model
 
 # Set up directories
 dir_test_img = Path('Dataset/Test/color')
@@ -30,7 +28,8 @@ def evaluate_model(
     model_path=None,
     in_training=False,
     point_based=False,
-    point_sigma=3.0
+    point_sigma=3.0,
+    class_weights=None
 ):
     """
     Evaluate a model on the test dataset.
@@ -48,6 +47,7 @@ def evaluate_model(
         in_training: Whether the evaluation is in training phase
         point_based: Whether the model is point-based
         point_sigma: Sigma for Gaussian point heatmap
+        class_weights: Optional class weights to apply during evaluation
     Returns:
         Tuple of (mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class)
     """
@@ -74,30 +74,30 @@ def evaluate_model(
     # Create test dataset and dataloader
     loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
     
+    # Create appropriate dataset based on model type
     if point_based:
-        # For point-based models, create a TestPointSegmentationDataset
         test_dataset = TestPointSegmentationDataset(test_img_files, test_mask_files, dim=img_dim, sigma=point_sigma)
-        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
-        
-        # Ensure model is in evaluation mode
-        model.eval()
-        
-        # Use the validate_point_model function to evaluate
-        mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class = validate_point_model(
-            model, test_loader, device, amp, n_classes=n_classes
-        )
     else:
-        # For standard models, use regular evaluation
         test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)
-        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
         
-        # Ensure model is in evaluation mode
-        model.eval()
-        
-        # Run evaluation using compute_metrics from metrics.py
-        mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class = compute_metrics(
-            model, test_loader, device, amp, dim=img_dim, n_classes=n_classes, desc='Testing round'
-        )
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
+    
+    # Use class weights from model if available and not explicitly provided
+    if class_weights is None and hasattr(model, 'class_weights'):
+        class_weights = model.class_weights
+    
+    # Unified evaluation for all model types
+    mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class = evaluate_segmentation(
+        net=model,
+        dataloader=test_loader,
+        device=device,
+        amp=amp,
+        n_classes=n_classes,
+        class_weights=class_weights,
+        mode='test',
+        is_point_model=point_based,
+        desc="Test evaluation"
+    )
     
     # Print results
     logging.info("=== Test Results ===")

@@ -14,8 +14,8 @@ import torch.nn.functional as F
 
 
 import wandb
-from metrics import compute_metrics, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
-from eval_utils import validate_point_model
+from metrics import compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
+from eval_utils import evaluate_segmentation
 from test import evaluate_model
 from models.unet_model import UNet, PointUNet 
 from models.clip_model import CLIPSegmentationModel
@@ -230,24 +230,24 @@ def train_model(
                 # Compute per-class IoU, Dice Score, and Pixel Accuracy
                 # Skip these metrics during reconstruction phase of autoencoder
                 if not (isinstance(model, Autoencoder) and model.training_phase == "reconstruction"):
-                    # For metrics calculation, create a mask excluding void pixels (255)
-                    metrics_mask = true_masks.clone()
-                    void_pixels = metrics_mask == 255
-                    
-                    # Get predictions
-                    pred_mask = masks_pred.argmax(dim=1)
-                    
-                    # Set void pixels to match prediction to exclude them from metric calculations
-                    # This effectively ignores these pixels in the metrics
-                    metrics_mask[void_pixels] = pred_mask[void_pixels]
-                    
-                    dice_scores = compute_dice_per_class(pred_mask, metrics_mask, n_classes=model.n_classes)
-                    iou_scores = compute_iou_per_class(pred_mask, metrics_mask, n_classes=model.n_classes)
-                    pixel_acc = compute_pixel_accuracy(pred_mask, metrics_mask)
+                    # Get predictions for logging (not affecting training)
+                    with torch.no_grad():
+                        pred_mask = masks_pred.argmax(dim=1)
+                        
+                        # For metrics calculation, create a mask excluding void pixels (255)
+                        metrics_mask = true_masks.clone()
+                        void_pixels = metrics_mask == 255
+                        
+                        # Set void pixels to match prediction to exclude them from metric calculations
+                        metrics_mask[void_pixels] = pred_mask[void_pixels]
+                        
+                        dice_scores = compute_dice_per_class(pred_mask, metrics_mask, n_classes=model.n_classes)
+                        iou_scores = compute_iou_per_class(pred_mask, metrics_mask, n_classes=model.n_classes)
+                        pixel_acc = compute_pixel_accuracy(pred_mask, metrics_mask)
 
-                    total_dice += dice_scores
-                    total_iou += iou_scores
-                    total_acc += pixel_acc
+                        total_dice += dice_scores
+                        total_iou += iou_scores
+                        total_acc += pixel_acc
 
                     # Log training metrics
                     experiment.log({
@@ -282,16 +282,17 @@ def train_model(
             logging.info(f"Epoch {epoch} - Training Loss: {epoch_loss:.4f}, Dice Score: {avg_dice.mean().item():.4f}, IoU: {avg_iou.mean().item():.4f}, Pixel Acc: {avg_acc:.4f}")
 
             # Perform validation at the end of each epoch
-            if is_point_model:
-                # For point models, we need a separate validation function
-                val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = validate_point_model(
-                    model, val_loader, device, amp, n_classes=model.n_classes
-                )
-            else:
-                # Regular validation for standard models
-                val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(
-                    model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes
-                )
+            val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = evaluate_segmentation(
+                net=model,
+                dataloader=val_loader,
+                device=device,
+                amp=amp,
+                n_classes=model.n_classes,
+                class_weights=class_weights,
+                mode='val',
+                is_point_model=is_point_model,
+                desc="Validation round"
+            )
             
             # Update scheduler (if using ReduceLROnPlateau)
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -358,31 +359,30 @@ def train_model(
     logging.info(f'Model loaded from {model_path}')
     model.to(device)
     
-    # Test evaluation is model-specific
+    # Test evaluation with consistent approach for all model types
+    test_images = list(dir_test_img.glob('*'))
+    test_masks = list(dir_test_mask.glob('*'))
+    test_images, test_masks = sort_and_match_files(test_images, test_masks)
+    
     if is_point_model:
-        # Create test dataset for point model
-        test_images = list(dir_test_img.glob('*'))
-        test_masks = list(dir_test_mask.glob('*'))
-        test_images, test_masks = sort_and_match_files(test_images, test_masks)
         test_dataset = TestPointSegmentationDataset(test_images, test_masks, dim=img_dim, sigma=sigma)
-        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
-        
-        # Evaluate point model
-        test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = validate_point_model(
-            model, test_loader, device, amp, n_classes=model.n_classes
-        )
     else:
-        # For regular models, use the evaluate_model function from test.py
-        test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate_model(
-            model=model,
-            device=device,
-            img_dim=img_dim,
-            amp=amp,
-            n_classes=model.n_classes if hasattr(model, 'n_classes') else 3,
-            results_path=None,  # No need to save results to a file as we log to wandb
-            model_path=model_path,
-            in_training=True
-        )
+        test_dataset = TestSegmentationDataset(test_images, test_masks, dim=img_dim)
+        
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
+    
+    # Unified evaluation approach for all model types
+    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate_segmentation(
+        net=model,
+        dataloader=test_loader,
+        device=device,
+        amp=amp,
+        n_classes=model.n_classes if hasattr(model, 'n_classes') else 3,
+        class_weights=class_weights,
+        mode='test',
+        is_point_model=is_point_model,
+        desc="Test evaluation"
+    )
     
     # Log test results to wandb
     if test_dice is not None:  # Make sure evaluation was successful
