@@ -76,7 +76,7 @@ def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float 
 
 
 @torch.inference_mode()
-def compute_metrics(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validation round'):
+def compute_metrics(net, dataloader, device, amp, dim = 256, n_classes=3, desc='Validation round', is_point_model=False):
     """
     Computes metrics for a model on a dataset.
 
@@ -114,8 +114,13 @@ def compute_metrics(net, dataloader, device, amp, dim = 256, n_classes=3, desc='
             image = image.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
             mask_true = mask_true.to(device=device, dtype=torch.long)
 
-            # Predict masks
-            mask_pred = net(image)
+            # Predict masks based on model type
+            if is_point_model:
+                point_heatmap = batch['point'].to(device=device, dtype=torch.float32)
+                mask_pred = net(image, point_heatmap)
+            else:
+                mask_pred = net(image)
+                
             mask_pred = mask_pred.argmax(dim=1)  # Convert to class indices
             
             # Resize masks to original size

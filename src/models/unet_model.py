@@ -123,4 +123,44 @@ class UNet(nn.Module):
         self.outc = torch.utils.checkpoint(self.outc)
     
 
+class PointUNet(UNet):
+    """
+    UNet architecture modified to use point prompts.
+    The model takes both an image and a point heatmap as input.
+    """
+    def __init__(self, n_channels, n_classes, bilinear=False):
+        # Call parent constructor with n_channels + 1 (for the point heatmap)
+        super().__init__(n_channels + 1, n_classes, bilinear)
+        self.n_image_channels = n_channels
+        self.is_point_model = True  # Flag to identify point models
+        
+    def forward(self, x, point_heatmap):
+        """
+        Forward pass that takes both image and point heatmap.
+        
+        Args:
+            x (torch.Tensor): Image tensor of shape (B, C, H, W)
+            point_heatmap (torch.Tensor): Point heatmap of shape (B, 1, H, W)
+            
+        Returns:
+            torch.Tensor: Segmentation logits
+        """
+        # Concatenate image and point heatmap along the channel dimension
+        x_combined = torch.cat([x, point_heatmap], dim=1)
+        
+        # Then perform standard UNet forward pass
+        x1 = self.inc(x_combined)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        x = self.up1(x5, x4)
+        x = self.up2(x, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+        logits = self.outc(x)
+        
+        return logits
+    
+
 

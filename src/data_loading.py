@@ -13,6 +13,8 @@ from torch.utils.data import Dataset
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
+import cv2
+import random
 
     
 def load_image(filename, is_mask=False):
@@ -261,3 +263,129 @@ def sort_and_match_files(images, masks):
     matched_masks = [mask_dict[name] for name in common_names]
     
     return matched_images, matched_masks
+
+# Add a new function to generate a point heatmap
+def generate_point_heatmap(mask, sigma=10, mode='random'):
+    """
+    Generate a point heatmap for a mask.
+    
+    Args:
+        mask (np.ndarray): Segmentation mask
+        sigma (int): Standard deviation for Gaussian kernel
+        mode (str): Point selection mode ('random', 'center')
+    
+    Returns:
+        tuple: (x, y) coordinates of the point and heatmap
+    """
+    # Get unique class values excluding background (0) and void label (255)
+    unique_values = np.unique(mask)
+    valid_classes = [val for val in unique_values if val not in [0, 255]]
+    
+    if len(valid_classes) == 0:  # No foreground classes found
+        # In this case, pick a point from the background
+        valid_classes = [0]
+    
+    # Randomly select a class to pick a point from
+    selected_class = random.choice(valid_classes)
+    
+    # Get coordinates of pixels belonging to the selected class
+    y_indices, x_indices = np.where(mask == selected_class)
+    
+    if len(y_indices) == 0:
+        # Fallback: use the center of the image
+        height, width = mask.shape
+        x, y = width // 2, height // 2
+    else:
+        if mode == 'center':
+            # Use the center of mass of the selected class
+            y = int(np.mean(y_indices))
+            x = int(np.mean(x_indices))
+        else:  # 'random'
+            # Randomly select a point from the selected class
+            idx = random.randint(0, len(y_indices) - 1)
+            y, x = y_indices[idx], x_indices[idx]
+    
+    # Create a heatmap using a Gaussian kernel
+    height, width = mask.shape
+    heatmap = np.zeros((height, width), dtype=np.float32)
+    heatmap[y, x] = 1
+    heatmap = cv2.GaussianBlur(heatmap, (0, 0), sigmaX=sigma, sigmaY=sigma)
+    
+    # Normalize the heatmap
+    heatmap = heatmap / heatmap.max()
+    
+    return (x, y), heatmap
+
+class PointSegmentationDataset(SegmentationDataset):
+    """
+    Segmentation dataset that includes point prompts.
+    
+    Args:
+        images (list[str]): List of image filenames
+        masks (list[str]): List of mask filenames
+        mask_suffix (str): Suffix for mask filenames
+        dim (int): Image dimension
+        sigma (int): Standard deviation for Gaussian kernel
+        point_mode (str): Mode for selecting points ('random', 'center')
+    """
+    def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', 
+                 dim: int = 256, sigma: int = 10, point_mode: str = 'random'):
+        super().__init__(images, masks, mask_suffix, dim)
+        self.sigma = sigma
+        self.point_mode = point_mode
+        
+    def __getitem__(self, idx):
+        result = super().__getitem__(idx)
+        img, mask = result['image'], result['mask']
+        
+        # Convert mask back to numpy for point generation
+        mask_np = mask.numpy().astype(np.uint8)
+        
+        # Generate a point and heatmap
+        (x, y), heatmap = generate_point_heatmap(mask_np, self.sigma, self.point_mode)
+        
+        # Convert heatmap to tensor
+        point_tensor = torch.from_numpy(heatmap).float().unsqueeze(0)
+        
+        # Add point and heatmap to result
+        result['point'] = point_tensor
+        result['point_coords'] = torch.tensor([x, y])
+        
+        return result
+
+class TestPointSegmentationDataset(TestSegmentationDataset):
+    """
+    Test dataset for point-based segmentation.
+    
+    Args:
+        images (list[str]): List of image filenames
+        masks (list[str]): List of mask filenames
+        mask_suffix (str): Suffix for mask filenames
+        dim (int): Image dimension
+        sigma (int): Standard deviation for Gaussian kernel
+        point_mode (str): Mode for selecting points ('random', 'center')
+    """
+    def __init__(self, images: list[str], masks: list[str], mask_suffix: str = '', 
+                 dim: int = 256, sigma: int = 10, point_mode: str = 'random'):
+        super().__init__(images, masks, mask_suffix, dim)
+        self.sigma = sigma
+        self.point_mode = point_mode
+        
+    def __getitem__(self, idx):
+        result = super().__getitem__(idx)
+        img, mask = result['image'], result['mask']
+        
+        # Convert mask to numpy for point generation
+        mask_np = mask.numpy().astype(np.uint8)
+        
+        # Generate a point and heatmap
+        (x, y), heatmap = generate_point_heatmap(mask_np, self.sigma, self.point_mode)
+        
+        # Convert heatmap to tensor
+        point_tensor = torch.from_numpy(heatmap).float().unsqueeze(0)
+        
+        # Add point and heatmap to result
+        result['point'] = point_tensor
+        result['point_coords'] = torch.tensor([x, y])
+        
+        return result
