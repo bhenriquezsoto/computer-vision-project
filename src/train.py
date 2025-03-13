@@ -31,7 +31,6 @@ from models.autoencoder_model import Autoencoder
 from models.clip_model import CLIPSegmentationModel
 
 # Import test evaluation function
-from test import evaluate_model
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
@@ -247,6 +246,11 @@ def train_model(
                             'image': images,
                             'mask': true_masks
                         }
+                        
+                        # Add point data for point-based models
+                        if is_point_model:
+                            batch_for_eval['point'] = points
+                            
                         # Create a temporary dataloader with just this batch
                         batch_loader = [batch_for_eval]
                         
