@@ -291,9 +291,9 @@ def train_model(
             # Avoid division by zero for classes that never appeared in any batch
             class_batch_count = torch.maximum(class_batch_count, torch.ones_like(class_batch_count))
             
-            # Calculate proper per-class averages
-            avg_dice = total_dice / class_batch_count.unsqueeze(1)
-            avg_iou = total_iou / class_batch_count.unsqueeze(1)
+            # Calculate proper per-class averages - no need for unsqueeze
+            avg_dice = total_dice / class_batch_count
+            avg_iou = total_iou / class_batch_count
             avg_acc = total_acc / len(train_loader)
             epoch_loss /= len(train_loader)
 

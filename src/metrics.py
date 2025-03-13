@@ -254,8 +254,10 @@ def adaptive_focal_loss_multiclass(inputs, targets, num_masks, class_weights=Non
     
     # Debug: Check for invalid values in targets
     unique_values = torch.unique(targets)
-    if torch.any(unique_values >= n_classes) and torch.any(unique_values != 255):
-        print(f"WARNING: Found invalid values in targets: {unique_values}")
+    # Only print a warning if there are values other than 0, 1, 2, 255
+    invalid_values = [v.item() for v in unique_values if v >= n_classes and v != 255]
+    if invalid_values:
+        print(f"WARNING: Found unexpected values in targets: {invalid_values}")
     
     # Handle void label (255) in targets before one-hot encoding
     # Create a copy of targets to avoid modifying the original

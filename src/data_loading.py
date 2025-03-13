@@ -417,7 +417,7 @@ class TestPointSegmentationDataset(TestSegmentationDataset):
         
         # Default weights give more emphasis to dogs (class 2) which shows lower performance
         if class_weights is None:
-            self.class_weights = [0.5, 0.8, 1.2]  # Background, Cat, Dog - much more emphasis on dogs
+            self.class_weights = [0.5, 0.8, 3.0]  # Background, Cat, Dog - much more emphasis on dogs
         else:
             self.class_weights = class_weights
             
