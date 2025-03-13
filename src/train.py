@@ -166,10 +166,11 @@ def train_model(
                             loss = criterion(masks_pred.squeeze(1), true_masks.float())
                             loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
                         else:
-                            true_masks_processed = true_masks.clone()
-                            true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
-                            loss = criterion(masks_pred, true_masks_processed)
-                            loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
+                            # Don't modify the true_masks - the CrossEntropyLoss with ignore_index=255 will handle void pixels
+                            loss = criterion(masks_pred, true_masks)
+                            # For dice loss, we still need to exclude void pixels
+                            mask_for_dice = true_masks.clone()
+                            loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255)
                 else:
                     # Standard forward pass for regular models
                     assert images.shape[1] == model.n_channels, \
@@ -194,10 +195,10 @@ def train_model(
                                 
                                 masks_pred = model(images)
                                 # Segmentation loss with class weights
-                                true_masks_processed = true_masks.clone()
-                                true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
                                 loss = criterion(masks_pred, true_masks)
-                                loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
+                                # For dice loss, we still need to exclude void pixels
+                                mask_for_dice = true_masks.clone()
+                                loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255)
                         else:
                             # Standard training for other models
                             masks_pred = model(images)
@@ -205,10 +206,11 @@ def train_model(
                                 loss = criterion(masks_pred.squeeze(1), true_masks.float())
                                 loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
                             else:
-                                true_masks_processed = true_masks.clone()
-                                true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
+                                # Don't modify the true_masks - the CrossEntropyLoss with ignore_index=255 will handle void pixels
                                 loss = criterion(masks_pred, true_masks)
-                                loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
+                                # For dice loss, we still need to exclude void pixels
+                                mask_for_dice = true_masks.clone()
+                                loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255)
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
@@ -224,9 +226,20 @@ def train_model(
                 # Compute per-class IoU, Dice Score, and Pixel Accuracy
                 # Skip these metrics during reconstruction phase of autoencoder
                 if not (isinstance(model, Autoencoder) and model.training_phase == "reconstruction"):
-                    dice_scores = compute_dice_per_class(masks_pred.argmax(dim=1), true_masks_processed, n_classes=model.n_classes)
-                    iou_scores = compute_iou_per_class(masks_pred.argmax(dim=1), true_masks_processed, n_classes=model.n_classes)
-                    pixel_acc = compute_pixel_accuracy(masks_pred.argmax(dim=1), true_masks_processed)
+                    # For metrics calculation, create a mask excluding void pixels (255)
+                    metrics_mask = true_masks.clone()
+                    void_pixels = metrics_mask == 255
+                    
+                    # Get predictions
+                    pred_mask = masks_pred.argmax(dim=1)
+                    
+                    # Set void pixels to match prediction to exclude them from metric calculations
+                    # This effectively ignores these pixels in the metrics
+                    metrics_mask[void_pixels] = pred_mask[void_pixels]
+                    
+                    dice_scores = compute_dice_per_class(pred_mask, metrics_mask, n_classes=model.n_classes)
+                    iou_scores = compute_iou_per_class(pred_mask, metrics_mask, n_classes=model.n_classes)
+                    pixel_acc = compute_pixel_accuracy(pred_mask, metrics_mask)
 
                     total_dice += dice_scores
                     total_iou += iou_scores
@@ -267,9 +280,9 @@ def train_model(
             # Perform validation at the end of each epoch
             if is_point_model:
                 # For point models, we need a separate validation function
-                val_metrics = validate_point_model(model, val_loader, device, amp, img_dim, model.n_classes)
-                val_dice, val_iou, val_acc = val_metrics['dice'], val_metrics['iou'], val_metrics['acc']
-                val_dice_per_class, val_iou_per_class = val_metrics['dice_per_class'], val_metrics['iou_per_class']
+                val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = validate_point_model(
+                    model, val_loader, device, amp, n_classes=model.n_classes
+                )
             else:
                 # Regular validation for standard models
                 val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(
@@ -351,9 +364,9 @@ def train_model(
         test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
         
         # Evaluate point model
-        test_metrics = validate_point_model(model, test_loader, device, amp, img_dim, model.n_classes)
-        test_dice, test_iou, test_acc = test_metrics['dice'], test_metrics['iou'], test_metrics['acc']
-        test_dice_per_class, test_iou_per_class = test_metrics['dice_per_class'], test_metrics['iou_per_class']
+        test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = validate_point_model(
+            model, test_loader, device, amp, n_classes=model.n_classes
+        )
     else:
         # For regular models, use the evaluate_model function from test.py
         test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate_model(

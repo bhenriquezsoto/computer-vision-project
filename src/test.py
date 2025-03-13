@@ -3,6 +3,7 @@ import logging
 import os
 from pathlib import Path
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from metrics import compute_metrics
@@ -10,7 +11,8 @@ from models.unet_model import UNet, PointUNet
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
 from data_loading import TestSegmentationDataset, sort_and_match_files, TestPointSegmentationDataset
-from eval_utils import validate_point_model  # Import from eval_utils instead of train.py
+from eval_utils import validate_point_model
+from utils.utils import load_checkpoint
 
 # Set up directories
 dir_test_img = Path('Dataset/Test/color')
@@ -82,9 +84,9 @@ def evaluate_model(
         model.eval()
         
         # Use the validate_point_model function to evaluate
-        metrics = validate_point_model(model, test_loader, device, amp, dim=img_dim, n_classes=n_classes)
-        mean_dice, mean_iou, mean_acc = metrics['dice'], metrics['iou'], metrics['acc']
-        dice_per_class, iou_per_class = metrics['dice_per_class'], metrics['iou_per_class']
+        mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class = validate_point_model(
+            model, test_loader, device, amp, n_classes=n_classes
+        )
     else:
         # For standard models, use regular evaluation
         test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)
@@ -137,16 +139,19 @@ def evaluate_model(
     return mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class
 
 def get_args():
-    parser = argparse.ArgumentParser(description='Test a trained model on the test set')
-    parser.add_argument('--model-path', '-m', type=str, required=True, help='Path to the saved model (.pth file)')
-    parser.add_argument('--model-type', '-t', type=str, choices=['unet', 'clip', 'autoencoder', 'pointunet'], default='unet', 
-                       help='Type of model to test')
-    parser.add_argument('--img-dim', '-s', type=int, default=256, help='Image dimension')
-    parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
-    parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling (UNet only)')
+    parser = argparse.ArgumentParser(description='Test the UNet on images and target masks')
+    parser.add_argument('--model-path', type=str, help='Path to the model checkpoint')
+    parser.add_argument('--model-type', type=str, default='unet', choices=['unet', 'pointunet'], help='Model type to use')
+    parser.add_argument('--point-based', action='store_true', help='Use point-based segmentation')
+    parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
+    parser.add_argument('--classes', type=int, default=3, help='Number of classes')
+    parser.add_argument('--batch-size', type=int, default=1, help='Batch size')
+    parser.add_argument('--num-workers', type=int, default=4, help='Number of workers')
+    parser.add_argument('--test-dir', type=str, default='data/test', help='Test directory')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
-    parser.add_argument('--point-based', '-p', action='store_true', default=False, help='Use point-based segmentation')
-    parser.add_argument('--point-sigma', '-ps', type=float, default=3.0, help='Sigma for Gaussian point heatmap')
+    parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    
     return parser.parse_args()
 
 def main():
@@ -191,13 +196,13 @@ def main():
     evaluate_model(
         model=model,
         device=device,
-        img_dim=args.img_dim,
+        img_dim=256,
         amp=args.amp,
         n_classes=args.classes,
         results_path=results_path,
         model_path=args.model_path,
         point_based=args.point_based,
-        point_sigma=args.point_sigma
+        point_sigma=3.0
     )
 
 if __name__ == '__main__':

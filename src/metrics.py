@@ -40,7 +40,7 @@ def compute_pixel_accuracy(pred: Tensor, target: Tensor):
     """Compute pixel accuracy (fraction of correctly classified pixels)."""
     return (pred == target).sum().float() / target.numel()
 
-def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float = 1e-6):
+def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float = 1e-6, ignore_index: int = None):
     """
     Compute Dice loss for binary or multi-class segmentation.
 
@@ -55,6 +55,7 @@ def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float 
         target (Tensor): Ground truth segmentation masks, shape (B, H, W)
         n_classes (int): Number of segmentation classes (default 1 for binary).
         epsilon (float): Small constant for numerical stability.
+        ignore_index (int): Optional label value to ignore (e.g., 255 for void)
 
     Returns:
         Tensor: Dice loss (scalar).
@@ -65,14 +66,73 @@ def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float 
         pred = input  # Use raw probability instead of thresholding
     else:  # Multi-class segmentation case
         input = torch.softmax(input, dim=1)  # Convert logits to class probabilities
-        target = F.one_hot(target, num_classes=n_classes).permute(0, 3, 1, 2).float()  # Convert to one-hot
+        
+        # Create a mask for valid pixels (not ignore_index)
+        valid_mask = None
+        if ignore_index is not None:
+            valid_mask = (target != ignore_index)
+            # Create a temporary target that won't cause issues with one_hot
+            temp_target = target.clone()
+            temp_target[~valid_mask] = 0  # Temporarily set ignored pixels to 0
+            # Convert to one-hot
+            target_one_hot = F.one_hot(temp_target, num_classes=n_classes).permute(0, 3, 1, 2).float()
+            # Zero out the pixels that should be ignored in the one-hot encoding
+            if valid_mask is not None:
+                valid_mask = valid_mask.unsqueeze(1).expand_as(target_one_hot)
+                target_one_hot = target_one_hot * valid_mask.float()
+        else:
+            target_one_hot = F.one_hot(target, num_classes=n_classes).permute(0, 3, 1, 2).float()
+        
+        target = target_one_hot
         pred = input  # Use probability scores instead of argmax
 
-    # Compute per-class Dice scores
-    dice_scores = compute_dice_per_class(pred, target, n_classes=n_classes, epsilon=epsilon)
-
-    # Take mean for multi-class, take scalar for binary
-    return 1 - (dice_scores.mean() if n_classes > 1 else dice_scores[0])
+    # Compute per-class Dice scores with ignore handling
+    batch_size = input.size(0)
+    
+    if n_classes == 1:
+        # For binary case, flatten and apply dice calculation
+        input_flat = input.view(batch_size, -1)
+        target_flat = target.view(batch_size, -1)
+        
+        # Apply mask if ignore_index is provided
+        if ignore_index is not None and valid_mask is not None:
+            valid_mask_flat = valid_mask.view(batch_size, -1)
+            intersection = torch.sum(input_flat * target_flat * valid_mask_flat.float(), dim=1)
+            total = torch.sum(input_flat * valid_mask_flat.float(), dim=1) + torch.sum(target_flat * valid_mask_flat.float(), dim=1)
+        else:
+            intersection = torch.sum(input_flat * target_flat, dim=1)
+            total = torch.sum(input_flat, dim=1) + torch.sum(target_flat, dim=1)
+            
+        dice = (2.0 * intersection + epsilon) / (total + epsilon)
+        return 1 - dice.mean()
+    else:
+        # For multi-class, compute dice per channel/class
+        dice_per_class = []
+        
+        for class_idx in range(n_classes):
+            # Extract class predictions and targets
+            pred_class = pred[:, class_idx, :, :]
+            target_class = target[:, class_idx, :, :]
+            
+            # Flatten for easier computation
+            pred_class_flat = pred_class.view(batch_size, -1)
+            target_class_flat = target_class.view(batch_size, -1)
+            
+            # Handle ignore_index if provided
+            if ignore_index is not None and valid_mask is not None:
+                valid_mask_flat = valid_mask[:, class_idx, :, :].view(batch_size, -1)
+                intersection = torch.sum(pred_class_flat * target_class_flat * valid_mask_flat.float(), dim=1)
+                total = torch.sum(pred_class_flat * valid_mask_flat.float(), dim=1) + torch.sum(target_class_flat * valid_mask_flat.float(), dim=1)
+            else:
+                intersection = torch.sum(pred_class_flat * target_class_flat, dim=1)
+                total = torch.sum(pred_class_flat, dim=1) + torch.sum(target_class_flat, dim=1)
+            
+            # Compute Dice and handle cases where both prediction and target are empty
+            class_dice = (2.0 * intersection + epsilon) / (total + epsilon)
+            dice_per_class.append(class_dice.mean())
+        
+        # Return mean Dice loss across all classes
+        return 1 - torch.mean(torch.stack(dice_per_class))
 
 
 @torch.inference_mode()
@@ -121,14 +181,20 @@ def compute_metrics(net, dataloader, device, amp, dim = 256, n_classes=3, desc='
             # Resize masks to original size
             mask_pred = F.interpolate(mask_pred.unsqueeze(1).float(), size=original_size, mode='nearest').long().squeeze(1)
 
-            # Ignore `255` class (void label) in mask
-            mask_true = mask_true.clone()
-            mask_true[mask_true == 255] = 0  # Treat void label as background
+            # Create a mask to identify void pixels (255)
+            void_pixels = mask_true == 255
+            
+            # For metrics calculation, create a mask that excludes void pixels
+            metrics_mask = mask_true.clone()
+            
+            # Set void pixels in the metrics mask to match the prediction
+            # This effectively ignores these pixels in the metrics calculation
+            metrics_mask[void_pixels] = mask_pred[void_pixels]
 
             # Compute Dice Score, IoU, and Pixel Accuracy
-            dice_scores = compute_dice_per_class(mask_pred, mask_true, n_classes=n_classes)
-            iou_scores = compute_iou_per_class(mask_pred, mask_true, n_classes=n_classes)
-            pixel_acc = compute_pixel_accuracy(mask_pred, mask_true)
+            dice_scores = compute_dice_per_class(mask_pred, metrics_mask, n_classes=n_classes)
+            iou_scores = compute_iou_per_class(mask_pred, metrics_mask, n_classes=n_classes)
+            pixel_acc = compute_pixel_accuracy(mask_pred, metrics_mask)
 
             # Accumulate results
             total_dice += dice_scores
