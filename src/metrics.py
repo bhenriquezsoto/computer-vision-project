@@ -252,8 +252,25 @@ def adaptive_focal_loss_multiclass(inputs, targets, num_masks, class_weights=Non
     # Get number of classes from inputs
     n_classes = inputs.shape[1]
     
-    # One-hot encode targets
-    targets_one_hot = F.one_hot(targets, num_classes=n_classes).permute(0, 3, 1, 2).float()
+    # Debug: Check for invalid values in targets
+    unique_values = torch.unique(targets)
+    if torch.any(unique_values >= n_classes) and torch.any(unique_values != 255):
+        print(f"WARNING: Found invalid values in targets: {unique_values}")
+    
+    # Handle void label (255) in targets before one-hot encoding
+    # Create a copy of targets to avoid modifying the original
+    targets_processed = targets.clone()
+    # Set void label to 0 (background) to avoid index out of bounds
+    targets_processed[targets == 255] = 0
+    
+    # One-hot encode targets (now all values are valid indices)
+    targets_one_hot = F.one_hot(targets_processed, num_classes=n_classes).permute(0, 3, 1, 2).float()
+    
+    # Create a mask for valid (non-void) pixels
+    valid_mask = (targets != 255).float().unsqueeze(1).expand_as(targets_one_hot)
+    
+    # Zero out the one-hot encoding for void pixels
+    targets_one_hot = targets_one_hot * valid_mask
     
     # Apply softmax to get class probabilities
     inputs_soft = F.softmax(inputs, dim=1)
@@ -273,7 +290,7 @@ def adaptive_focal_loss_multiclass(inputs, targets, num_masks, class_weights=Non
         )
         
         # Apply class weight if provided
-        if class_weights is not None:
+        if class_weights is not None and cls < len(class_weights):
             cls_loss = cls_loss * class_weights[cls]
         
         total_loss += cls_loss

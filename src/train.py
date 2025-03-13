@@ -195,18 +195,20 @@ def train_model(
                             # Can still add dice loss as a complementary loss
                             loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
                         else:
-                            true_masks_processed = true_masks.clone()
-                            # Don't replace 255 values here, as the adaptive loss handles them internally
-                            
                             # Use Adaptive Focal Loss for multi-class segmentation
                             loss = adaptive_focal_loss_multiclass(
                                 masks_pred, true_masks, 
                                 num_masks=images.shape[0],
+                                class_weights=class_weights,  # Pass the class weights here
                                 epsilon=0.5, gamma=2.0, delta=0.4, alpha=1.0
                             )
-                            # Can still add dice loss as a complementary loss
-                            true_masks_processed[true_masks_processed == 255] = 0  # For dice loss, treat void as background
-                            loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
+                            
+                            # Process targets for dice loss, treating void as background
+                            true_masks_processed = true_masks.clone()
+                            true_masks_processed[true_masks_processed == 255] = 0
+                            
+                            # Add dice loss as a complementary loss with a weight of 0.5
+                            loss += 0.8 * dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
                     else:
                         # Standard training for other models
                         masks_pred = model(images)
