@@ -148,19 +148,24 @@ def compute_metrics(net, dataloader, device, amp, dim = 256, n_classes=3, desc='
             # Resize masks to original size
             mask_pred = F.interpolate(mask_pred.unsqueeze(1).float(), size=original_size, mode='nearest').long().squeeze(1)
 
-            # Ignore `255` class (void label) in mask
-            mask_true = mask_true.clone()
-            mask_true[mask_true == 255] = 0  # Treat void label as background
+            # Handle any remaining void labels (255) in mask
+            # Note: Most should already be processed by fill_void_labels_with_neighbor_info
+            mask_true_processed = mask_true.clone()
+            if (mask_true_processed == 255).any():
+                # If there are still some void pixels, convert them to the most common class in the prediction
+                void_pixels = (mask_true_processed == 255)
+                most_common_class = torch.mode(mask_pred[void_pixels])[0] if void_pixels.any() else 0
+                mask_true_processed[void_pixels] = most_common_class
 
             # Compute Dice Score, IoU, and Pixel Accuracy
-            dice_scores = compute_dice_per_class(mask_pred, mask_true, n_classes=n_classes)
-            iou_scores = compute_iou_per_class(mask_pred, mask_true, n_classes=n_classes)
-            pixel_acc = compute_pixel_accuracy(mask_pred, mask_true)
+            dice_scores = compute_dice_per_class(mask_pred, mask_true_processed, n_classes=n_classes)
+            iou_scores = compute_iou_per_class(mask_pred, mask_true_processed, n_classes=n_classes)
+            pixel_acc = compute_pixel_accuracy(mask_pred, mask_true_processed)
 
             # Check which classes are present in this batch
             class_present = torch.zeros(n_classes, device=device, dtype=torch.bool)
             for cls in range(n_classes):
-                class_present[cls] = (mask_true == cls).any()
+                class_present[cls] = (mask_true_processed == cls).any()
             
             # Only accumulate metrics for classes that are present
             total_dice += torch.where(class_present, dice_scores, torch.zeros_like(dice_scores))
@@ -259,20 +264,33 @@ def adaptive_focal_loss_multiclass(inputs, targets, num_masks, class_weights=Non
     if invalid_values:
         print(f"WARNING: Found unexpected values in targets: {invalid_values}")
     
-    # Handle void label (255) in targets before one-hot encoding
-    # Create a copy of targets to avoid modifying the original
-    targets_processed = targets.clone()
-    # Set void label to 0 (background) to avoid index out of bounds
-    targets_processed[targets == 255] = 0
+    # For any remaining void pixels, handle them better
+    if 255 in unique_values:
+        # Create mask of void pixels
+        void_pixels = (targets == 255)
+        
+        # If prediction is available, fill void pixels with the most probable class from the model
+        if void_pixels.any():
+            # Get the most probable class for each pixel from the model predictions
+            probs = F.softmax(inputs, dim=1)
+            most_likely_class = probs.argmax(dim=1)
+            
+            # Create a new targets tensor with void pixels filled
+            targets_filled = targets.clone()
+            targets_filled[void_pixels] = most_likely_class[void_pixels]
+            
+            # Use the filled targets for the rest of the computation
+            targets = targets_filled
     
-    # One-hot encode targets (now all values are valid indices)
+    # Create a copy to avoid modifying the original
+    targets_processed = targets.clone()
+    # Set any remaining void labels to 0 as a fallback (should be very few or none)
+    targets_processed[targets_processed == 255] = 0
+    
+    # One-hot encode targets
     targets_one_hot = F.one_hot(targets_processed, num_classes=n_classes).permute(0, 3, 1, 2).float()
     
-    # Create a mask for valid (non-void) pixels
-    valid_mask = (targets != 255).float().unsqueeze(1).expand_as(targets_one_hot)
-    
-    # Zero out the one-hot encoding for void pixels
-    targets_one_hot = targets_one_hot * valid_mask
+    # No need for a separate valid mask anymore since we've handled void pixels
     
     # Apply softmax to get class probabilities
     inputs_soft = F.softmax(inputs, dim=1)

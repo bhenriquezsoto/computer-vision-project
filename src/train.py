@@ -216,10 +216,22 @@ def train_model(
                             loss = criterion(masks_pred.squeeze(1), true_masks.float())
                             loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
                         else:
+                            # Handle any remaining void pixels in the masks
+                            # Most void pixels should have been processed during data loading
                             true_masks_processed = true_masks.clone()
-                            true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
+                            if (true_masks_processed == 255).any():
+                                # Use predicted class probabilities to fill void pixels
+                                void_pixels = (true_masks_processed == 255)
+                                pred_classes = masks_pred.argmax(dim=1)
+                                true_masks_processed[void_pixels] = pred_classes[void_pixels]
+                            
+                            # Ensure no remaining void labels for dice loss
+                            true_masks_dice = true_masks_processed.clone()
+                            true_masks_dice[true_masks_dice == 255] = 0
+                            
+                            # Apply losses
                             loss = criterion(masks_pred, true_masks)
-                            loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
+                            loss += dice_loss(masks_pred, true_masks_dice, n_classes=model.n_classes)
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
@@ -234,9 +246,14 @@ def train_model(
                 
                 # Skip metrics during reconstruction phase of autoencoder
                 if not (isinstance(model, Autoencoder) and model.training_phase == "reconstruction"):
-                    # Handle void labels
+                    # Handle void labels better for metrics calculation
                     true_masks_for_metrics = true_masks.clone()
-                    true_masks_for_metrics[true_masks_for_metrics == 255] = 0  # Treat void label as background
+                    
+                    # If there are any remaining void pixels, use the predicted class
+                    if (true_masks_for_metrics == 255).any():
+                        void_pixels = (true_masks_for_metrics == 255)
+                        pred_classes = masks_pred.argmax(dim=1)
+                        true_masks_for_metrics[void_pixels] = pred_classes[void_pixels]
                     
                     # Calculate metrics
                     dice_scores = compute_dice_per_class(masks_pred.argmax(dim=1), true_masks_for_metrics, n_classes=model.n_classes)

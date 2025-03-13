@@ -16,6 +16,7 @@ from tqdm import tqdm
 import cv2
 import random
 import torch.nn.functional as F
+from scipy import ndimage
 
     
 def load_image(filename, is_mask=False):
@@ -60,7 +61,52 @@ def unique_mask_values(mask_file):
     else:
         raise ValueError(f'Loaded masks should have 2 or 3 dimensions, found {mask.ndim}')
 
-
+def fill_void_labels_with_neighbor_info(mask, void_label=255):
+    """
+    Fill void label pixels with the most common neighboring label.
+    
+    Args:
+        mask (np.ndarray): Input mask with void label pixels
+        void_label (int): Value representing void label (default: 255)
+    
+    Returns:
+        np.ndarray: Mask with void label pixels filled based on neighborhood analysis
+    """
+    # Create a copy to avoid modifying the original
+    filled_mask = mask.copy()
+    
+    # Find void label pixels
+    void_pixels = (mask == void_label)
+    
+    # If no void pixels, return the original mask
+    if not np.any(void_pixels):
+        return filled_mask
+    
+    # For each class, calculate a distance transform to find the nearest pixel of that class
+    # Start with a high initial distance
+    min_distances = np.full_like(mask, float('inf'), dtype=float)
+    best_class = np.zeros_like(mask)
+    
+    # Get unique classes (excluding void label)
+    classes = np.unique(mask)
+    classes = classes[classes != void_label]
+    
+    for cls in classes:
+        # Create a binary mask for this class
+        class_mask = (mask == cls)
+        
+        # Calculate distance transform - how far each pixel is from this class
+        dist = ndimage.distance_transform_edt(~class_mask)
+        
+        # Update min_distances and best_class where this class is closer
+        closer = dist < min_distances
+        min_distances[closer] = dist[closer]
+        best_class[closer] = cls
+    
+    # Replace void pixels with their nearest class
+    filled_mask[void_pixels] = best_class[void_pixels]
+    
+    return filled_mask
 
 def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: int = 256):
     """Preprocess the image and mask for training.
@@ -79,6 +125,10 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
     
     assert mode in ['train', 'valTest'], f'Invalid mode: {mode}'
     assert dim > 0, f'Invalid image dimension: {dim}'
+    
+    # Process void labels (255) based on neighborhood before augmentation
+    if mask is not None:
+        mask = fill_void_labels_with_neighbor_info(mask, void_label=255)
     
     # Define common transformations for standard resizing and normalization    
     resizing = A.Compose([
