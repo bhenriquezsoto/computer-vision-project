@@ -48,7 +48,7 @@ def load_image(filename, is_mask=False):
 def calculate_class_weights(mask_files, n_classes):
     """
     Calculate class weights based on class frequencies in the dataset.
-    Weights are inversely proportional to class frequencies.
+    Weights are inversely proportional to class frequencies with a soft normalization.
     
     Args:
         mask_files (list): List of mask file paths
@@ -70,7 +70,8 @@ def calculate_class_weights(mask_files, n_classes):
     # Calculate weights (inverse of frequency)
     class_weights = total_pixels / (n_classes * class_counts + 1e-10)
     
-    # Normalize weights
+    # Soft normalization using square root to reduce extreme weights
+    class_weights = torch.sqrt(class_weights)
     class_weights = class_weights / class_weights.sum()
     
     return class_weights

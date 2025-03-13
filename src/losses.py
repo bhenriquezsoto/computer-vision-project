@@ -50,7 +50,7 @@ def adaptive_focal_loss(inputs, targets, num_masks, epsilon: float = 0.5, gamma:
 
     return loss.mean(1).sum() / num_masks
 
-def adaptive_focal_loss_multi_class(inputs, targets, num_masks, epsilon: float = 0.5, gamma: float = 2,
+def adaptive_focal_loss_multi_class(inputs, targets, num_masks, class_weights=None, epsilon: float = 0.5, gamma: float = 2,
                                   delta: float = 0.4, alpha: float = 1.0, eps: float = 1e-12):
     """
     Multi-class version of Adaptive Focal Loss.
@@ -59,6 +59,7 @@ def adaptive_focal_loss_multi_class(inputs, targets, num_masks, epsilon: float =
         inputs: A float tensor of shape [B, C, H, W] where C is the number of classes
         targets: A long tensor of shape [B, H, W] with class indices
         num_masks: Number of masks in the batch
+        class_weights: Optional tensor of class weights [C]
         epsilon: Weighting factor for positive/negative balance
         gamma: Base exponent of the modulating factor
         delta: Factor to estimate the gap between ∇B and BCE loss gradient
@@ -96,7 +97,7 @@ def adaptive_focal_loss_multi_class(inputs, targets, num_masks, epsilon: float =
     
     # Compute final loss with proper dimension handling
     # Average beta over spatial dimensions
-    beta_mean = beta.mean(dim=(2, 3))  # [B, C]
+    beta_mean = beta.mean(dim=(2, 3))
     
     # Compute polynomial term and average over spatial dimensions
     poly_term = ((1 - p_t) ** (gamma + 1)).mean(dim=(2, 3))  # [B, C]
@@ -115,6 +116,12 @@ def adaptive_focal_loss_multi_class(inputs, targets, num_masks, epsilon: float =
     
     # Now combine terms with matching dimensions
     loss = mult.squeeze(-1).squeeze(-1) * ce_loss * beta_mean + alpha * poly_term
+    
+    # Apply class weights if provided
+    if class_weights is not None:
+        # Expand class weights to match batch dimension
+        class_weights = class_weights.unsqueeze(0)  # [1, C]
+        loss = loss * class_weights
     
     # Apply epsilon weighting if specified
     if epsilon >= 0:

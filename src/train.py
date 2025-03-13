@@ -165,15 +165,17 @@ def train_model(
                         # Forward pass with additional point input
                         masks_pred = model(images, points)
                         
-                        # Loss calculation using Adaptive Focal Loss
+                        # Loss calculation using Adaptive Focal Loss with class weights
                         if model.n_classes == 1:
                             loss = criterion(masks_pred.squeeze(1), true_masks.float(), len(images))
-                            loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
+                            loss += 0.5 * dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
                         else:
-                            loss = criterion(masks_pred, true_masks, len(images))
+                            # Use weighted combination of AFL and Dice loss
+                            afl_loss = criterion(masks_pred, true_masks, len(images), class_weights=class_weights)
                             # For dice loss, we still need to exclude void pixels
                             mask_for_dice = true_masks.clone()
-                            loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255)
+                            dice = dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255, class_weights=class_weights)
+                            loss = afl_loss + 0.3 * dice  # Give more weight to AFL
                 else:
                     # Standard forward pass for regular models
                     assert images.shape[1] == model.n_channels, \
@@ -197,11 +199,11 @@ def train_model(
                                     model.set_phase("segmentation")
                                 
                                 masks_pred = model(images)
-                                # Segmentation loss with Adaptive Focal Loss
-                                loss = criterion(masks_pred, true_masks, len(images))
+                                # Segmentation loss with Adaptive Focal Loss and class weights
+                                loss = criterion(masks_pred, true_masks, len(images), class_weights=class_weights)
                                 # For dice loss, we still need to exclude void pixels
                                 mask_for_dice = true_masks.clone()
-                                loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255)
+                                loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255, class_weights=class_weights)
                         else:
                             # Standard training for other models
                             masks_pred = model(images)
@@ -209,10 +211,10 @@ def train_model(
                                 loss = criterion(masks_pred.squeeze(1), true_masks.float(), len(images))
                                 loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
                             else:
-                                loss = criterion(masks_pred, true_masks, len(images))
+                                loss = criterion(masks_pred, true_masks, len(images), class_weights=class_weights)
                                 # For dice loss, we still need to exclude void pixels
                                 mask_for_dice = true_masks.clone()
-                                loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255)
+                                loss += dice_loss(masks_pred, mask_for_dice, n_classes=model.n_classes, ignore_index=255, class_weights=class_weights)
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()

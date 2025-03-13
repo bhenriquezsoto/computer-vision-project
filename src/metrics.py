@@ -40,7 +40,7 @@ def compute_pixel_accuracy(pred: Tensor, target: Tensor):
     """Compute pixel accuracy (fraction of correctly classified pixels)."""
     return (pred == target).sum().float() / target.numel()
 
-def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float = 1e-6, ignore_index: int = None):
+def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float = 1e-6, ignore_index: int = None, class_weights: Tensor = None):
     """
     Compute Dice loss for binary or multi-class segmentation.
 
@@ -56,6 +56,7 @@ def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float 
         n_classes (int): Number of segmentation classes (default 1 for binary).
         epsilon (float): Small constant for numerical stability.
         ignore_index (int): Optional label value to ignore (e.g., 255 for void)
+        class_weights (Tensor): Optional tensor of class weights [C]
 
     Returns:
         Tensor: Dice loss (scalar).
@@ -131,8 +132,13 @@ def dice_loss(input: Tensor, target: Tensor, n_classes: int = 1, epsilon: float 
             class_dice = (2.0 * intersection + epsilon) / (total + epsilon)
             dice_per_class.append(class_dice.mean())
         
-        # Return mean Dice loss across all classes
-        return 1 - torch.mean(torch.stack(dice_per_class))
+        # Stack dice scores and apply class weights if provided
+        dice_scores = torch.stack(dice_per_class)
+        if class_weights is not None:
+            dice_scores = dice_scores * class_weights
+        
+        # Return weighted mean Dice loss across all classes
+        return 1 - torch.mean(dice_scores)
 
 
 @torch.inference_mode()
