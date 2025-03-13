@@ -10,14 +10,17 @@ from torch.amp import GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
+import torch.nn.functional as F
+
 
 import wandb
 from metrics import compute_metrics, compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
+from eval_utils import validate_point_model
 from test import evaluate_model
-from models.unet_model import UNet 
+from models.unet_model import UNet, PointUNet 
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
-from data_loading import SegmentationDataset, TestSegmentationDataset, sort_and_match_files
+from data_loading import SegmentationDataset, TestSegmentationDataset, sort_and_match_files, PointSegmentationDataset, TestPointSegmentationDataset
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
@@ -32,6 +35,8 @@ def get_model(args):
         model = CLIPSegmentationModel(n_classes=args.classes)
     elif args.model == 'autoencoder':
         model = Autoencoder(n_channels=3, n_classes=args.classes)
+    elif args.model == 'pointunet':
+        model = PointUNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
     else:
         raise ValueError(f"Unsupported model: {args.model}")
     
@@ -51,7 +56,9 @@ def train_model(
         save_checkpoint: bool = False,
         img_dim: int = 256,
         amp: bool = False,
-        gradient_clipping: float = 1.0
+        gradient_clipping: float = 1.0,
+        point_based: bool = False,
+        sigma: float = 3.0
 ):
     # Create checkpoint directory at the beginning to avoid repeated checks
     os.makedirs(dir_checkpoint, exist_ok=True)
@@ -71,9 +78,15 @@ def train_model(
     val_images = [matched_images[i] for i in val_indices]
     val_masks = [matched_masks[i] for i in val_indices]
     
-    # 2. Create dataset. If augmentation is enabled, tune the augmentation parameters in 'data_loading.py'
-    train_set = SegmentationDataset(train_images, train_masks, dim=img_dim)
-    val_set = TestSegmentationDataset(val_images, val_masks, dim=img_dim)
+    # 2. Create dataset
+    if point_based:
+        train_set = PointSegmentationDataset(train_images, train_masks, dim=img_dim, sigma=sigma)
+        val_set = TestPointSegmentationDataset(val_images, val_masks, dim=img_dim, sigma=sigma)
+        is_point_model = True
+    else:
+        train_set = SegmentationDataset(train_images, train_masks, dim=img_dim)
+        val_set = TestSegmentationDataset(val_images, val_masks, dim=img_dim)
+        is_point_model = False
     
     print("Training set dimensions: ", len(train_set))
     print("Validation set dimensions: ", len(val_set))
@@ -87,7 +100,8 @@ def train_model(
     experiment = wandb.init(project='U-Net', resume='allow', anonymous='must')
     experiment.config.update(
         dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, weight_decay=weight_decay,
-             val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim, model=model.__class__.__name__, amp=amp, optimizer=optimizer, dropout=0)
+             val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim, model=model.__class__.__name__, 
+             amp=amp, optimizer=optimizer, dropout=0, point_based=point_based, point_sigma=sigma)
     )
 
     logging.info(f'''Starting training:
@@ -103,6 +117,7 @@ def train_model(
         Device:          {device.type}
         Image dimensions:{img_dim}x{img_dim}
         Mixed Precision: {amp}
+        Point-based:     {point_based}
     ''')
 
     # 4. Set up the optimizer, the loss, the learning rate scheduler and the loss scaling for AMP
@@ -119,7 +134,7 @@ def train_model(
 
     scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)  # or ReduceLROnPlateau(optimizer, mode='max', patience=5)
     grad_scaler = GradScaler(enabled=amp)
-    criterion = nn.CrossEntropyLoss(ignore_index=255, weights = class_weights) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
+    criterion = nn.CrossEntropyLoss(ignore_index=255, weight=class_weights) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
     best_val_iou = 0
     best_val_iou_after_epoch_10 = 0
@@ -136,48 +151,64 @@ def train_model(
         
         with tqdm(total=len(train_set), desc=f'Epoch {epoch}/{epochs}', unit='img', leave=True) as pbar:
             for batch in train_loader:
-                images, true_masks = batch['image'], batch['mask']
+                images = batch['image'].to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
+                true_masks = batch['mask'].to(device=device, dtype=torch.long)
 
-                assert images.shape[1] == model.n_channels, \
-                    f'Network has {model.n_channels} input channels, but got {images.shape[1]}.'
-
-                images = images.to(device=device, dtype=torch.float32, memory_format=torch.channels_last)
-                true_masks = true_masks.to(device=device, dtype=torch.long)
-
-                with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
-                    # Special handling for autoencoder model with two-phase training
-                    if isinstance(model, Autoencoder):
-                        # Phase 1: Reconstruction training (first half of epochs)
-                        if epoch <= epochs // 2:
-                            model.set_phase("reconstruction")
-                            masks_pred = model(images)
-                            # Reconstruction loss (MSE between input and output)
-                            loss = nn.MSELoss()(masks_pred, images)
-                        # Phase 2: Segmentation training (second half of epochs)
-                        else:
-                            # If this is the first epoch of segmentation phase, load pretrained encoder
-                            if epoch == epochs // 2 + 1:
-                                logging.info("Switching to segmentation phase, using pretrained encoder")
-                                # Use current model state for encoder weights
-                                model.set_phase("segmentation")
-                            
-                            masks_pred = model(images)
-                            # Segmentation loss with class weights
-                            true_masks_processed = true_masks.clone()
-                            true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
-                            loss = criterion(masks_pred, true_masks)
-                            loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
-                    else:
-                        # Standard training for other models
-                        masks_pred = model(images)
+                # Special handling for point-based models
+                if is_point_model:
+                    points = batch['point'].to(device=device, dtype=torch.float32)
+                    with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
+                        # Forward pass with additional point input
+                        masks_pred = model(images, points)
+                        
+                        # Loss calculation
                         if model.n_classes == 1:
                             loss = criterion(masks_pred.squeeze(1), true_masks.float())
                             loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
                         else:
                             true_masks_processed = true_masks.clone()
                             true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
-                            loss = criterion(masks_pred, true_masks)
+                            loss = criterion(masks_pred, true_masks_processed)
                             loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
+                else:
+                    # Standard forward pass for regular models
+                    assert images.shape[1] == model.n_channels, \
+                        f'Network has {model.n_channels} input channels, but got {images.shape[1]}.'
+
+                    with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
+                        # Special handling for autoencoder model with two-phase training
+                        if isinstance(model, Autoencoder):
+                            # Phase 1: Reconstruction training (first half of epochs)
+                            if epoch <= epochs // 2:
+                                model.set_phase("reconstruction")
+                                masks_pred = model(images)
+                                # Reconstruction loss (MSE between input and output)
+                                loss = nn.MSELoss()(masks_pred, images)
+                            # Phase 2: Segmentation training (second half of epochs)
+                            else:
+                                # If this is the first epoch of segmentation phase, load pretrained encoder
+                                if epoch == epochs // 2 + 1:
+                                    logging.info("Switching to segmentation phase, using pretrained encoder")
+                                    # Use current model state for encoder weights
+                                    model.set_phase("segmentation")
+                                
+                                masks_pred = model(images)
+                                # Segmentation loss with class weights
+                                true_masks_processed = true_masks.clone()
+                                true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
+                                loss = criterion(masks_pred, true_masks)
+                                loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
+                        else:
+                            # Standard training for other models
+                            masks_pred = model(images)
+                            if model.n_classes == 1:
+                                loss = criterion(masks_pred.squeeze(1), true_masks.float())
+                                loss += dice_loss(masks_pred.squeeze(1), true_masks.float(), n_classes=model.n_classes)
+                            else:
+                                true_masks_processed = true_masks.clone()
+                                true_masks_processed[true_masks_processed == 255] = 0  # Ignore void label
+                                loss = criterion(masks_pred, true_masks)
+                                loss += dice_loss(masks_pred, true_masks_processed, n_classes=model.n_classes)
 
                 optimizer.zero_grad(set_to_none=True)
                 grad_scaler.scale(loss).backward()
@@ -234,9 +265,16 @@ def train_model(
             logging.info(f"Epoch {epoch} - Training Loss: {epoch_loss:.4f}, Dice Score: {avg_dice.mean().item():.4f}, IoU: {avg_iou.mean().item():.4f}, Pixel Acc: {avg_acc:.4f}")
 
             # Perform validation at the end of each epoch
-            val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(
-                model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes
-            )
+            if is_point_model:
+                # For point models, we need a separate validation function
+                val_metrics = validate_point_model(model, val_loader, device, amp, img_dim, model.n_classes)
+                val_dice, val_iou, val_acc = val_metrics['dice'], val_metrics['iou'], val_metrics['acc']
+                val_dice_per_class, val_iou_per_class = val_metrics['dice_per_class'], val_metrics['iou_per_class']
+            else:
+                # Regular validation for standard models
+                val_dice, val_iou, val_acc, val_dice_per_class, val_iou_per_class = compute_metrics(
+                    model, val_loader, device, amp, dim=img_dim, n_classes=model.n_classes
+                )
             
             # Update scheduler (if using ReduceLROnPlateau)
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
@@ -303,17 +341,31 @@ def train_model(
     logging.info(f'Model loaded from {model_path}')
     model.to(device)
     
-    # Use the evaluate_model function from test.py
-    test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate_model(
-        model=model,
-        device=device,
-        img_dim=img_dim,
-        amp=amp,
-        n_classes=model.n_classes if hasattr(model, 'n_classes') else 3,
-        results_path=None,  # No need to save results to a file as we log to wandb
-        model_path=model_path,
-        in_training=True
-    )
+    # Test evaluation is model-specific
+    if is_point_model:
+        # Create test dataset for point model
+        test_images = list(dir_test_img.glob('*'))
+        test_masks = list(dir_test_mask.glob('*'))
+        test_images, test_masks = sort_and_match_files(test_images, test_masks)
+        test_dataset = TestPointSegmentationDataset(test_images, test_masks, dim=img_dim, sigma=sigma)
+        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
+        
+        # Evaluate point model
+        test_metrics = validate_point_model(model, test_loader, device, amp, img_dim, model.n_classes)
+        test_dice, test_iou, test_acc = test_metrics['dice'], test_metrics['iou'], test_metrics['acc']
+        test_dice_per_class, test_iou_per_class = test_metrics['dice_per_class'], test_metrics['iou_per_class']
+    else:
+        # For regular models, use the evaluate_model function from test.py
+        test_dice, test_iou, test_acc, test_dice_per_class, test_iou_per_class = evaluate_model(
+            model=model,
+            device=device,
+            img_dim=img_dim,
+            amp=amp,
+            n_classes=model.n_classes if hasattr(model, 'n_classes') else 3,
+            results_path=None,  # No need to save results to a file as we log to wandb
+            model_path=model_path,
+            in_training=True
+        )
     
     # Log test results to wandb
     if test_dice is not None:  # Make sure evaluation was successful
@@ -342,8 +394,10 @@ def get_args():
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
-    parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip', 'autoencoder'], default='unet', help='Choose model (unet or clip)')
+    parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip', 'autoencoder', 'pointunet'], default='unet', help='Choose model')
     parser.add_argument('--class-weights', '-cw', type=float, nargs='+', default=None, help='Class weights, space-separated (e.g., -cw 0.1 0.8 0.6)')
+    parser.add_argument('--point-based', '-p', action='store_true', default=False, help='Use point-based segmentation')
+    parser.add_argument('--point-sigma', '-ps', type=float, default=3.0, help='Sigma for Gaussian point heatmap')
 
     return parser.parse_args()
 
@@ -368,6 +422,12 @@ if __name__ == '__main__':
                     f'\t{model.n_channels} input channels\n'
                     f'\t{model.n_classes} output channels (classes)\n'
                     f'\tAutoencoder with two-phase training')
+    elif args.model == 'pointunet':
+        logging.info(f'Network:\n'
+                    f'\t{model.n_channels} input channels + 1 point channel\n'
+                    f'\t{model.n_classes} output channels (classes)\n'
+                    f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling\n'
+                    f'\tPoint-based segmentation with sigma={args.point_sigma}')
     else:  # UNet model
         logging.info(f'Network:\n'
                     f'\t{model.n_channels} input channels\n'
@@ -401,7 +461,9 @@ if __name__ == '__main__':
             device=device,
             img_dim=args.img_dim,
             val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            point_based=args.point_based,
+            sigma=args.point_sigma
         )
     except torch.cuda.OutOfMemoryError:
         logging.error('Detected OutOfMemoryError! '
@@ -420,5 +482,7 @@ if __name__ == '__main__':
             device=device,
             img_dim=args.img_dim,
             val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            point_based=args.point_based,
+            sigma=args.point_sigma
         )

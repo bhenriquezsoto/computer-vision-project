@@ -13,6 +13,7 @@ from torch.utils.data import Dataset
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
+from scipy.ndimage import gaussian_filter
 
     
 def load_image(filename, is_mask=False):
@@ -261,3 +262,210 @@ def sort_and_match_files(images, masks):
     matched_masks = [mask_dict[name] for name in common_names]
     
     return matched_images, matched_masks
+
+def create_point_heatmap(point, shape, sigma=3.0):
+    """
+    Create a Gaussian heatmap centered at the provided point.
+    
+    Args:
+        point (tuple): (y, x) coordinates of the center point
+        shape (tuple): (height, width) of the output heatmap
+        sigma (float): Standard deviation of the Gaussian kernel
+        
+    Returns:
+        np.ndarray: Gaussian heatmap
+    """
+    y, x = point
+    heatmap = np.zeros(shape, dtype=np.float32)
+    
+    # Place a single 1 at the point location
+    if 0 <= y < shape[0] and 0 <= x < shape[1]:
+        heatmap[y, x] = 1.0
+    
+    # Apply Gaussian filter to spread the point
+    heatmap = gaussian_filter(heatmap, sigma=sigma)
+    
+    # Normalize to [0, 1]
+    if heatmap.max() > 0:
+        heatmap = heatmap / heatmap.max()
+    
+    return heatmap
+
+class PointSegmentationDataset(Dataset):
+    """
+    Dataset for point-based segmentation that samples points on objects and provides
+    (image, point_heatmap, mask) triplets for training.
+    
+    Args:
+        images (list[str]): List of image filenames
+        masks (list[str]): List of mask filenames
+        dim (int): Target image dimension
+        sigma (float): Standard deviation for Gaussian point heatmap
+    """
+    def __init__(self, images: list[str], masks: list[str], dim: int = 256, sigma: float = 3.0):
+        assert len(images) == len(masks), "Mismatch between number of images and masks!"
+        
+        self.image_files = images
+        self.mask_files = masks
+        self.dim = dim
+        self.sigma = sigma
+        
+        logging.info(f'Creating point-based segmentation dataset with {len(self.image_files)} examples')
+        
+        # Scan for unique mask values
+        with Pool() as p:
+            unique = list(tqdm(
+                p.imap(unique_mask_values, self.mask_files),
+                total=len(self.mask_files)
+            ))
+            
+        self.mask_values = list(sorted(np.unique(np.concatenate(unique), axis=0).tolist()))
+        logging.info(f'Unique mask values: {self.mask_values}')
+        
+    def __len__(self):
+        return len(self.image_files)
+    
+    def __getitem__(self, idx):
+        img_file = self.image_files[idx]
+        mask_file = self.mask_files[idx]
+        
+        # Load image and mask
+        mask = load_image(mask_file, is_mask=True)
+        img = load_image(img_file)
+        
+        assert img.shape[:2] == mask.shape[:2], \
+            f'Image and mask {img_file}, {mask_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
+        
+        # Apply preprocessing transformations
+        img_tensor, mask_tensor, _ = preprocessing(img, mask, mode='train', dim=self.dim)
+        
+        # Convert tensors back to numpy for point sampling
+        # We need to work with the processed mask to ensure alignment
+        processed_mask_np = mask_tensor.numpy()
+        
+        # For training, we randomly select any class to segment (including background class 0)
+        available_classes = np.unique(processed_mask_np)
+        
+        # Randomly select a class from all available classes (including background)
+        target_class = np.random.choice(available_classes)
+        
+        # Create binary mask for the target class
+        target_mask = (processed_mask_np == target_class).astype(np.float32)
+        
+        # Find coordinates of the target class
+        y_coords, x_coords = np.where(processed_mask_np == target_class)
+        
+        # If no pixels of this class are found (edge case), pick any point
+        if len(y_coords) == 0:
+            y, x = processed_mask_np.shape[0] // 2, processed_mask_np.shape[1] // 2
+            target_class = processed_mask_np[y, x]  # Use whatever class is at the center
+            target_mask = (processed_mask_np == target_class).astype(np.float32)
+            y_coords, x_coords = np.where(processed_mask_np == target_class)
+        
+        # Sample a random point from this class
+        point_idx = np.random.randint(0, len(y_coords))
+        y, x = y_coords[point_idx], x_coords[point_idx]
+        
+        # Create point heatmap (Gaussian centered at the selected point)
+        point_heatmap = create_point_heatmap((y, x), processed_mask_np.shape, sigma=self.sigma)
+        
+        # Convert heatmap to tensor
+        point_heatmap_tensor = torch.from_numpy(point_heatmap).unsqueeze(0)  # Add channel dimension [1, H, W]
+        
+        # Convert target mask to tensor 
+        target_mask_tensor = torch.from_numpy(target_mask).long()
+        
+        return {
+            'image': img_tensor,  # [3, H, W]
+            'point': point_heatmap_tensor,  # [1, H, W]
+            'mask': target_mask_tensor,  # [H, W]
+            'class': target_class  # Class ID for reference
+        }
+
+class TestPointSegmentationDataset(Dataset):
+    """
+    Dataset for testing point-based segmentation models.
+    
+    Args:
+        images (list[str]): List of image filenames
+        masks (list[str]): List of mask filenames
+        dim (int): Target image dimension
+        sigma (float): Standard deviation for Gaussian point heatmap
+    """
+    def __init__(self, images: list[str], masks: list[str], dim: int = 256, sigma: float = 3.0):
+        assert len(images) == len(masks), "Mismatch between number of images and masks!"
+        
+        self.image_files = images
+        self.mask_files = masks
+        self.dim = dim
+        self.sigma = sigma
+        
+        logging.info(f'Creating test point-based segmentation dataset with {len(self.image_files)} examples')
+        
+        # Scan for unique mask values
+        with Pool() as p:
+            unique = list(tqdm(
+                p.imap(unique_mask_values, self.mask_files),
+                total=len(self.mask_files)
+            ))
+            
+        self.mask_values = list(sorted(np.unique(np.concatenate(unique), axis=0).tolist()))
+        logging.info(f'Unique mask values: {self.mask_values}')
+        
+    def __len__(self):
+        return len(self.image_files) * 3  # Return 3 samples per image (one for each class)
+    
+    def __getitem__(self, idx):
+        # Map idx to image_idx and class_idx
+        image_idx = idx // 3
+        class_idx = idx % 3  # 0, 1, 2 for background, cat, dog
+        
+        img_file = self.image_files[image_idx]
+        mask_file = self.mask_files[image_idx]
+        
+        # Load image and mask
+        mask = load_image(mask_file, is_mask=True)
+        img = load_image(img_file)
+        
+        assert img.shape[:2] == mask.shape[:2], \
+            f'Image and mask {img_file}, {mask_file} should be the same size, but are {img.shape[:2]} and {mask.shape[:2]}'
+        
+        # Apply preprocessing transformations
+        img_tensor, mask_tensor, original_mask = preprocessing(img, mask, mode='valTest', dim=self.dim)
+        
+        # Convert tensors back to numpy for point sampling
+        processed_mask_np = mask_tensor.numpy()
+        
+        # Find coordinates for the specified class
+        y_coords, x_coords = np.where(processed_mask_np == class_idx)
+        
+        # If no pixels of this class are found, generate point near center
+        if len(y_coords) == 0:
+            # If class not present, generate a point in center area
+            y = processed_mask_np.shape[0] // 2
+            x = processed_mask_np.shape[1] // 2
+            # For testing, we'll create a dummy target mask (all zeros)
+            target_mask = np.zeros_like(processed_mask_np, dtype=np.float32)
+        else:
+            # Sample a point from the middle of the region for consistency
+            center_idx = len(y_coords) // 2
+            y, x = y_coords[center_idx], x_coords[center_idx]
+            # For testing, create binary mask for the target class
+            target_mask = (processed_mask_np == class_idx).astype(np.float32)
+        
+        # Create point heatmap
+        point_heatmap = create_point_heatmap((y, x), processed_mask_np.shape, sigma=self.sigma)
+        
+        # Convert heatmap to tensor
+        point_heatmap_tensor = torch.from_numpy(point_heatmap).unsqueeze(0)  # Add channel dimension [1, H, W]
+        
+        # Convert target mask to tensor
+        target_mask_tensor = torch.from_numpy(target_mask).long()
+        
+        return {
+            'image': img_tensor,  # [3, H, W]
+            'point': point_heatmap_tensor,  # [1, H, W]
+            'mask': target_mask_tensor,  # [H, W]
+            'class': class_idx,  # Class ID for reference
+            'image_idx': image_idx  # Original image index for reference
+        }

@@ -6,10 +6,11 @@ import torch
 from torch.utils.data import DataLoader
 
 from metrics import compute_metrics
-from models.unet_model import UNet
+from models.unet_model import UNet, PointUNet
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
-from data_loading import TestSegmentationDataset, sort_and_match_files
+from data_loading import TestSegmentationDataset, sort_and_match_files, TestPointSegmentationDataset
+from eval_utils import validate_point_model  # Import from eval_utils instead of train.py
 
 # Set up directories
 dir_test_img = Path('Dataset/Test/color')
@@ -26,7 +27,9 @@ def evaluate_model(
     test_mask_dir=dir_test_mask,
     results_path=None,
     model_path=None,
-    in_training=False
+    in_training=False,
+    point_based=False,
+    point_sigma=3.0
 ):
     """
     Evaluate a model on the test dataset.
@@ -42,6 +45,8 @@ def evaluate_model(
         results_path: Path to save results (if None, derived from model_path)
         model_path: Path of the model (used for generating results_path if needed)
         in_training: Whether the evaluation is in training phase
+        point_based: Whether the model is point-based
+        point_sigma: Sigma for Gaussian point heatmap
     Returns:
         Tuple of (mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class)
     """
@@ -66,17 +71,32 @@ def evaluate_model(
     test_img_files, test_mask_files = sort_and_match_files(test_img_files, test_mask_files)
     
     # Create test dataset and dataloader
-    test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)
     loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
     
-    # Ensure model is in evaluation mode
-    model.eval()
-    
-    # Run evaluation using compute_metrics from metrics.py
-    mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class = compute_metrics(
-        model, test_loader, device, amp, dim=img_dim, n_classes=n_classes, desc='Testing round'
-    )
+    if point_based:
+        # For point-based models, create a TestPointSegmentationDataset
+        test_dataset = TestPointSegmentationDataset(test_img_files, test_mask_files, dim=img_dim, sigma=point_sigma)
+        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
+        
+        # Ensure model is in evaluation mode
+        model.eval()
+        
+        # Use the validate_point_model function to evaluate
+        metrics = validate_point_model(model, test_loader, device, amp, dim=img_dim, n_classes=n_classes)
+        mean_dice, mean_iou, mean_acc = metrics['dice'], metrics['iou'], metrics['acc']
+        dice_per_class, iou_per_class = metrics['dice_per_class'], metrics['iou_per_class']
+    else:
+        # For standard models, use regular evaluation
+        test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)
+        test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
+        
+        # Ensure model is in evaluation mode
+        model.eval()
+        
+        # Run evaluation using compute_metrics from metrics.py
+        mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class = compute_metrics(
+            model, test_loader, device, amp, dim=img_dim, n_classes=n_classes, desc='Testing round'
+        )
     
     # Print results
     logging.info("=== Test Results ===")
@@ -119,12 +139,14 @@ def evaluate_model(
 def get_args():
     parser = argparse.ArgumentParser(description='Test a trained model on the test set')
     parser.add_argument('--model-path', '-m', type=str, required=True, help='Path to the saved model (.pth file)')
-    parser.add_argument('--model-type', '-t', type=str, choices=['unet', 'clip', 'autoencoder'], default='unet', 
+    parser.add_argument('--model-type', '-t', type=str, choices=['unet', 'clip', 'autoencoder', 'pointunet'], default='unet', 
                        help='Type of model to test')
     parser.add_argument('--img-dim', '-s', type=int, default=256, help='Image dimension')
     parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling (UNet only)')
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
+    parser.add_argument('--point-based', '-p', action='store_true', default=False, help='Use point-based segmentation')
+    parser.add_argument('--point-sigma', '-ps', type=float, default=3.0, help='Sigma for Gaussian point heatmap')
     return parser.parse_args()
 
 def main():
@@ -147,6 +169,8 @@ def main():
         model = Autoencoder(n_channels=3, n_classes=args.classes)
         # Ensure we're in segmentation phase for testing
         model.set_phase("segmentation")
+    elif args.model_type == 'pointunet':
+        model = PointUNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
     else:
         raise ValueError(f"Unsupported model type: {args.model_type}")
     
@@ -171,7 +195,9 @@ def main():
         amp=args.amp,
         n_classes=args.classes,
         results_path=results_path,
-        model_path=args.model_path
+        model_path=args.model_path,
+        point_based=args.point_based,
+        point_sigma=args.point_sigma
     )
 
 if __name__ == '__main__':
