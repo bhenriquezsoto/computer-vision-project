@@ -45,6 +45,35 @@ def load_image(filename, is_mask=False):
         
     return img
 
+def calculate_class_weights(mask_files, n_classes):
+    """
+    Calculate class weights based on class frequencies in the dataset.
+    Weights are inversely proportional to class frequencies.
+    
+    Args:
+        mask_files (list): List of mask file paths
+        n_classes (int): Number of classes
+        
+    Returns:
+        torch.Tensor: Class weights
+    """
+    class_counts = torch.zeros(n_classes)
+    total_pixels = 0
+    
+    for mask_file in mask_files:
+        mask = load_image(mask_file, is_mask=True)
+        # Count pixels for each class (excluding void pixels)
+        for c in range(n_classes):
+            class_counts[c] += (mask == c).sum()
+        total_pixels += (mask != 255).sum()
+    
+    # Calculate weights (inverse of frequency)
+    class_weights = total_pixels / (n_classes * class_counts + 1e-10)
+    
+    # Normalize weights
+    class_weights = class_weights / class_weights.sum()
+    
+    return class_weights
     
 def unique_mask_values(mask_file):
     """Load mask file and return unique values."""

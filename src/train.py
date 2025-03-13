@@ -20,7 +20,8 @@ from test import evaluate_model
 from models.unet_model import UNet, PointUNet 
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
-from data_loading import SegmentationDataset, TestSegmentationDataset, sort_and_match_files, PointSegmentationDataset, TestPointSegmentationDataset
+from data_loading import SegmentationDataset, TestSegmentationDataset, sort_and_match_files, PointSegmentationDataset, TestPointSegmentationDataset, calculate_class_weights
+
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
@@ -458,8 +459,16 @@ if __name__ == '__main__':
             'Number of class weights must match number of classes. Expected: {} but got: {}'.format(args.classes, len(args.class_weights))
         class_weights = torch.tensor(args.class_weights, dtype=torch.float32).to(device)
     else:
-        class_weights = None
-
+        # Get all image and mask files and match them
+        all_images = list(dir_img.glob('*'))
+        all_masks = list(dir_mask.glob('*'))
+        matched_images, matched_masks = sort_and_match_files(all_images, all_masks)
+        
+        # Calculate class weights based on dataset statistics
+        logging.info("Calculating class weights from dataset statistics...")
+        class_weights = calculate_class_weights(matched_masks, args.classes)
+        class_weights = class_weights.to(device)
+        logging.info(f"Calculated class weights: {class_weights.tolist()}")
 
     model.to(device=device)
     try:
