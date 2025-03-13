@@ -447,11 +447,9 @@ class TestPointSegmentationDataset(Dataset):
             # For testing, we'll create a dummy target mask (all zeros)
             target_mask = np.zeros_like(processed_mask_np, dtype=np.float32)
         else:
-            # Sample a point from the middle of the region for consistency
-            center_idx = len(y_coords) // 2
-            y, x = y_coords[center_idx], x_coords[center_idx]
-            # For testing, create binary mask for the target class
-            target_mask = (processed_mask_np == class_idx).astype(np.float32)
+            # Take random point from the class
+            point_idx = np.random.randint(0, len(y_coords))
+            y, x = y_coords[point_idx], x_coords[point_idx]
         
         # Create point heatmap
         point_heatmap = create_point_heatmap((y, x), processed_mask_np.shape, sigma=self.sigma)

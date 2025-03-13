@@ -12,7 +12,6 @@ from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
 from data_loading import TestSegmentationDataset, sort_and_match_files, TestPointSegmentationDataset
 from eval_utils import validate_point_model
-from utils.utils import load_checkpoint
 
 # Set up directories
 dir_test_img = Path('Dataset/Test/color')
