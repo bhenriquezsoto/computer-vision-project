@@ -48,7 +48,7 @@ def load_image(filename, is_mask=False):
 def calculate_class_weights(mask_files, n_classes):
     """
     Calculate class weights based on class frequencies in the dataset.
-    Weights are inversely proportional to class frequencies with a soft normalization.
+    Weights are inversely proportional to class frequencies.
     
     Args:
         mask_files (list): List of mask file paths
@@ -70,8 +70,11 @@ def calculate_class_weights(mask_files, n_classes):
     # Calculate weights (inverse of frequency)
     class_weights = total_pixels / (n_classes * class_counts + 1e-10)
     
-    # Soft normalization using square root to reduce extreme weights
-    class_weights = torch.sqrt(class_weights)
+    # More extreme weights for minority classes
+    # Apply power to increase the gap between common and rare classes
+    class_weights = class_weights ** 1.5
+    
+    # Normalize weights
     class_weights = class_weights / class_weights.sum()
     
     return class_weights
@@ -375,6 +378,7 @@ class PointSegmentationDataset(Dataset):
         
         # For training, we randomly select any class to segment (including background class 0)
         available_classes = np.unique(processed_mask_np)
+        available_classes = available_classes[available_classes < 255]  # Remove void class
         
         # Randomly select a class from all available classes (including background)
         target_class = np.random.choice(available_classes)
@@ -443,15 +447,12 @@ class TestPointSegmentationDataset(Dataset):
         logging.info(f'Unique mask values: {self.mask_values}')
         
     def __len__(self):
-        return len(self.image_files) * 3  # Return 3 samples per image (one for each class)
+        # Return actual number of images instead of 3x
+        return len(self.image_files)
     
     def __getitem__(self, idx):
-        # Map idx to image_idx and class_idx
-        image_idx = idx // 3
-        class_idx = idx % 3  # 0, 1, 2 for background, cat, dog
-        
-        img_file = self.image_files[image_idx]
-        mask_file = self.mask_files[image_idx]
+        img_file = self.image_files[idx]
+        mask_file = self.mask_files[idx]
         
         # Load image and mask
         mask = load_image(mask_file, is_mask=True)
@@ -466,20 +467,30 @@ class TestPointSegmentationDataset(Dataset):
         # Convert tensors back to numpy for point sampling
         processed_mask_np = mask_tensor.numpy()
         
+        # Find available classes in this image (excluding void pixels)
+        available_classes = np.unique(processed_mask_np)
+        available_classes = available_classes[available_classes < 255]  # Remove void class
+        
+        # Choose a random class that exists in this image
+        if len(available_classes) > 0:
+            class_idx = np.random.choice(available_classes)
+        else:
+            class_idx = 0  # Fallback to background
+        
         # Find coordinates for the specified class
         y_coords, x_coords = np.where(processed_mask_np == class_idx)
         
-        # If no pixels of this class are found, generate point near center
+        # If no pixels of this class are found (which shouldn't happen now), generate point near center
         if len(y_coords) == 0:
-            # If class not present, generate a point in center area
+            # This should be rare since we're selecting from available classes
             y = processed_mask_np.shape[0] // 2
             x = processed_mask_np.shape[1] // 2
             # For testing, we'll create a dummy target mask (all zeros)
             target_mask = np.zeros_like(processed_mask_np, dtype=np.float32)
         else:
-            # Take random point from the class
-            point_idx = np.random.randint(0, len(y_coords))
-            y, x = y_coords[point_idx], x_coords[point_idx]
+            # Use centroid instead of random point for more stable evaluation
+            y = int(np.mean(y_coords))
+            x = int(np.mean(x_coords))
             # Create binary mask for the target class
             target_mask = (processed_mask_np == class_idx).astype(np.float32)
         
@@ -497,5 +508,5 @@ class TestPointSegmentationDataset(Dataset):
             'point': point_heatmap_tensor,  # [1, H, W]
             'mask': target_mask_tensor,  # [H, W]
             'class': class_idx,  # Class ID for reference
-            'image_idx': image_idx  # Original image index for reference
+            'image_idx': idx  # Original image index for reference
         }

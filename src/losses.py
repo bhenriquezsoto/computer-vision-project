@@ -115,14 +115,18 @@ def adaptive_focal_loss_multi_class(inputs, targets, num_masks, class_weights=No
     ce_loss = ce_loss.unsqueeze(1)  # [B, 1]
     
     # Now combine terms with matching dimensions
-    loss = mult.squeeze(-1).squeeze(-1) * ce_loss * beta_mean + alpha * poly_term
+    loss = mult.squeeze(-1).squeeze(-1) * ce_loss * beta_mean + alpha * poly_term  # [B, C]
     
-    # Apply class weights if provided
+    # First average over batch dimension
+    loss = loss.mean(0)  # [C]
+    
+    # Then apply class weights if provided
     if class_weights is not None:
-        # Expand class weights to match batch dimension
-        class_weights = class_weights.unsqueeze(0)  # [1, C]
-        loss = loss * class_weights
+        loss = loss * class_weights  # [C]
     
+    # Finally, sum over classes and normalize by number of masks
+    return loss.sum() / num_masks
+
     # Apply epsilon weighting if specified
     if epsilon >= 0:
         epsilon_t = epsilon * targets_one_hot + (1 - epsilon) * (1 - targets_one_hot)

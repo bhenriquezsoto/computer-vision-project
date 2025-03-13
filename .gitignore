@@ -11,3 +11,4 @@ Computer Vision Mini-Project.pdf
 wandb/
 weights/
 src/checkpoints/
+src/__pycache__/
