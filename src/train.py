@@ -23,9 +23,9 @@ from data_loading import (
     PointSegmentationDataset, 
     TestPointSegmentationDataset
 )
-from metrics import compute_pixel_accuracy
+from metrics import compute_pixel_accuracy, dice_loss
 from eval_utils import evaluate_segmentation
-from losses import dice_loss, adaptive_focal_loss_multi_class
+from losses import adaptive_focal_loss_multi_class, adaptive_focal_loss
 from models.unet_model import UNet, PointUNet
 from models.autoencoder_model import Autoencoder
 from models.clip_model import CLIPSegmentationModel
