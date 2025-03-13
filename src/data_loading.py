@@ -450,6 +450,8 @@ class TestPointSegmentationDataset(Dataset):
             # Take random point from the class
             point_idx = np.random.randint(0, len(y_coords))
             y, x = y_coords[point_idx], x_coords[point_idx]
+            # Create binary mask for the target class
+            target_mask = (processed_mask_np == class_idx).astype(np.float32)
         
         # Create point heatmap
         point_heatmap = create_point_heatmap((y, x), processed_mask_np.shape, sigma=self.sigma)
