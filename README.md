@@ -3,6 +3,9 @@
 🎮 **Try our interactive demo!** Upload an image and click on a pet to generate its segmentation mask:  
 ➡️ [Live Demo on Hugging Face Spaces](https://huggingface.co/spaces/bhenriquezsoto/point-based-segmentation-1)
 
+## Loss Function
+The loss function implementation is adapted from the AdaptiveClick paper ([Liang et al. 2023](https://arxiv.org/pdf/2305.04276)) and its [official repository](https://github.com/lab206/adaptiveclick). The loss used in here combines dice-loss with an adaptive click-based loss that helps guide the segmentation based on user-provided points.
+
 ## About
 This repository contains the 2024/25 Computer Vision course project at the University of Edinburgh, focusing on pet segmentation using various deep learning approaches.
 
