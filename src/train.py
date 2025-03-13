@@ -2,27 +2,36 @@ import argparse
 import logging
 import os
 from pathlib import Path
+
+import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import wandb
 from torch import optim
-from torch import nn
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
-import torch.nn.functional as F
 
-
-import wandb
-from metrics import compute_dice_per_class, compute_iou_per_class, compute_pixel_accuracy, dice_loss
+from data_loading import (
+    SegmentationDataset, 
+    TestSegmentationDataset, 
+    calculate_class_weights, 
+    sort_and_match_files, 
+    PointSegmentationDataset, 
+    TestPointSegmentationDataset
+)
+from metrics import compute_pixel_accuracy
 from eval_utils import evaluate_segmentation
-from test import evaluate_model
-from models.unet_model import UNet, PointUNet 
-from models.clip_model import CLIPSegmentationModel
+from losses import dice_loss, adaptive_focal_loss_multi_class
+from models.unet_model import UNet, PointUNet
 from models.autoencoder_model import Autoencoder
-from data_loading import SegmentationDataset, TestSegmentationDataset, sort_and_match_files, PointSegmentationDataset, TestPointSegmentationDataset, calculate_class_weights
-from losses import adaptive_focal_loss, adaptive_focal_loss_multi_class
+from models.clip_model import CLIPSegmentationModel
 
+# Import test evaluation function
+from test import evaluate_model
 
 dir_img = Path('Dataset/TrainVal/color')
 dir_mask = Path('Dataset/TrainVal/label')
@@ -232,29 +241,37 @@ def train_model(
                 if not (isinstance(model, Autoencoder) and model.training_phase == "reconstruction"):
                     # Get predictions for logging (not affecting training)
                     with torch.no_grad():
-                        pred_mask = masks_pred.argmax(dim=1)
+                        # Instead of calculating metrics directly, use the same function as validation
+                        # Create a mini-batch of just the current examples for evaluation
+                        batch_for_eval = {
+                            'image': images,
+                            'mask': true_masks
+                        }
+                        # Create a temporary dataloader with just this batch
+                        batch_loader = [batch_for_eval]
                         
-                        # For metrics calculation, create a mask excluding void pixels (255)
-                        metrics_mask = true_masks.clone()
-                        void_pixels = metrics_mask == 255
+                        # Use evaluate_segmentation with mode='train' for consistency with validation
+                        _, _, batch_acc, dice_scores, iou_scores = evaluate_segmentation(
+                            net=model,
+                            dataloader=batch_loader,
+                            device=device,
+                            amp=amp,
+                            n_classes=model.n_classes,
+                            class_weights=class_weights,
+                            mode='train',
+                            is_point_model=is_point_model
+                        )
                         
-                        # Set void pixels to match prediction to exclude them from metric calculations
-                        metrics_mask[void_pixels] = pred_mask[void_pixels]
-                        
-                        dice_scores = compute_dice_per_class(pred_mask, metrics_mask, n_classes=model.n_classes)
-                        iou_scores = compute_iou_per_class(pred_mask, metrics_mask, n_classes=model.n_classes)
-                        pixel_acc = compute_pixel_accuracy(pred_mask, metrics_mask)
-
                         total_dice += dice_scores
                         total_iou += iou_scores
-                        total_acc += pixel_acc
+                        total_acc += batch_acc
 
                     # Log training metrics
                     experiment.log({
                         'train loss': loss.item(),
                         'train Dice (avg)': dice_scores.mean().item(),
                         'train IoU (avg)': iou_scores.mean().item(),
-                        'train Pixel Accuracy': pixel_acc,
+                        'train Pixel Accuracy': batch_acc,
                         **{f'train Dice class {i}': dice_scores[i].item() for i in range(model.n_classes)},
                         **{f'train IoU class {i}': iou_scores[i].item() for i in range(model.n_classes)},
                         'step': global_step,

@@ -56,11 +56,15 @@ def evaluate_segmentation(net, dataloader, device, amp, n_classes=3, class_weigh
     iou_per_class = torch.zeros(n_classes, device=device)
     
     # Context manager for inference mode (unless in training mode)
-    cm = torch.inference_mode() if mode != 'train' else torch.enable_grad()
+    # When evaluating during training, we need to use the current model state without activating inference mode
+    cm = torch.no_grad()
     
     with cm:
         with torch.autocast(device.type if device.type != 'mps' else 'cpu', enabled=amp):
-            for batch in tqdm(dataloader, total=num_batches, desc=desc, unit="batch", leave=False):
+            # In training mode with a single batch, skip tqdm for efficiency
+            batch_iterator = dataloader if mode == 'train' and num_batches <= 1 else tqdm(dataloader, total=num_batches, desc=desc, unit="batch", leave=False)
+            
+            for batch in batch_iterator:
                 images = batch['image']
                 true_masks = batch['mask']
                 
@@ -97,13 +101,17 @@ def evaluate_segmentation(net, dataloader, device, amp, n_classes=3, class_weigh
                     pixel_acc += correct.mean()
                 else:
                     # For multi-class segmentation
+                    # Get the hard prediction for the mask
+                    masks_pred_cls = masks_pred.argmax(dim=1)
+                    
+                    # Set void pixels in the metrics mask to match the prediction to exclude them
+                    metrics_mask[void_pixels] = masks_pred_cls[void_pixels]
+                    
                     # Temporarily set void pixels to a valid class index to avoid errors in one_hot
-                    metrics_mask[void_pixels] = 0
                     true_masks_one_hot = F.one_hot(metrics_mask, n_classes).permute(0, 3, 1, 2).float()
                     
                     # Get probabilities using softmax
                     masks_pred_probs = F.softmax(masks_pred, dim=1)
-                    masks_pred_cls = masks_pred.argmax(dim=1)
                     
                     # Create a mask for valid pixels (not void)
                     valid_mask = ~void_pixels
