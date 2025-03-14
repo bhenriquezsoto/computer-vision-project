@@ -148,13 +148,13 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
         augmentation = A.Compose([
             resizing,
             
-            #### ENHANCED AUGMENTATION PIPELINE ####
+            #### SIMPLIFIED AUGMENTATION PIPELINE ####
             
             # Geometric transforms
             A.HorizontalFlip(p=0.5),                       # Flip images & masks with 50% probability
             A.Rotate(limit=25, p=0.7),                     # Random rotation (-25° to 25°) with higher probability
-            A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.15, rotate_limit=15, p=0.5),  # More geometric diversity
-            A.ElasticTransform(alpha=120, sigma=120 * 0.05, alpha_affine=120 * 0.03, p=0.3),  # Elastic distortion
+            A.Affine(scale=(0.85, 1.15), translate_percent=(0.1, 0.1), rotate=(-15, 15), p=0.5),  # Replaces ShiftScaleRotate
+            A.ElasticTransform(alpha=120, sigma=120 * 0.05, p=0.3),  # Elastic distortion with fixed parameters
             
             # Color and contrast transforms (only applied to images, not masks)
             A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),  # Light adjustments
@@ -165,14 +165,14 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
             A.OneOf([                                      # Apply one of these with 40% probability
                 A.GaussianBlur(blur_limit=(3, 7), p=1.0),  # Gaussian blur
                 A.MotionBlur(blur_limit=7, p=1.0),         # Motion blur
-                A.GaussNoise(var_limit=(10, 50), p=1.0),   # Random noise
+                A.GaussNoise(p=1.0),                       # Random noise with default parameters
             ], p=0.4),
             
             # Advanced augmentations for small objects (helps with cats)
             A.OneOf([                                      # Apply one of these with 30% probability
                 A.GridDistortion(p=1.0),                   # Grid distortion
-                A.OpticalDistortion(distort_limit=0.05, shift_limit=0.05, p=1.0),  # Optical distortion
-                A.CoarseDropout(max_holes=8, max_height=32, max_width=32, p=1.0),  # Randomly drop patches
+                A.OpticalDistortion(distort_limit=0.05, p=1.0),  # Optical distortion without shift_limit
+                A.Cutout(num_holes=8, max_h_size=32, max_w_size=32, p=1.0),  # Replaces CoarseDropout
             ], p=0.3),
             
             # Final normalization
