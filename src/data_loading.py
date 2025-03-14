@@ -151,29 +151,29 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
             #### SIMPLIFIED AUGMENTATION PIPELINE ####
             
             # Geometric transforms
-            A.HorizontalFlip(p=0.5),                       # Flip images & masks with 50% probability
-            A.Rotate(limit=25, p=0.7),                     # Random rotation (-25° to 25°) with higher probability
-            A.Affine(scale=(0.85, 1.15), translate_percent=(0.1, 0.1), rotate=(-15, 15), p=0.5),  # Replaces ShiftScaleRotate
-            A.ElasticTransform(alpha=120, sigma=120 * 0.05, p=0.3),  # Elastic distortion with fixed parameters
+            A.HorizontalFlip(p=0.3),                       # Reduced from 0.5
+            A.Rotate(limit=15, p=0.3),                     # Reduced from 0.7, smaller rotation range
+            A.Affine(scale=(0.9, 1.1), translate_percent=(0.05, 0.05), rotate=(-10, 10), p=0.3),  # More subtle transforms
+            A.ElasticTransform(alpha=60, sigma=60 * 0.05, p=0.2),  # Reduced intensity
             
             # Color and contrast transforms (only applied to images, not masks)
-            A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),  # Light adjustments
-            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color variation
-            A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=15, val_shift_limit=10, p=0.3),  # More color variety
+            A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.3),  # More subtle adjustments
+            A.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.05, p=0.3),  # Reduced color variation
+            A.HueSaturationValue(hue_shift_limit=5, sat_shift_limit=8, val_shift_limit=5, p=0.2),  # More subtle color changes
             
             # Noise and blur for robustness
-            A.OneOf([                                      # Apply one of these with 40% probability
-                A.GaussianBlur(blur_limit=(3, 7), p=1.0),  # Gaussian blur
-                A.MotionBlur(blur_limit=7, p=1.0),         # Motion blur
+            A.OneOf([                                      # Reduced probability from 0.4 to 0.3
+                A.GaussianBlur(blur_limit=(3, 5), p=1.0),  # Reduced blur range
+                A.MotionBlur(blur_limit=5, p=1.0),         # Reduced blur limit
                 A.GaussNoise(p=1.0),                       # Random noise with default parameters
-            ], p=0.4),
+            ], p=0.3),
             
             # Advanced augmentations for small objects (helps with cats)
-            A.OneOf([                                      # Apply one of these with 30% probability
+            A.OneOf([                                      # Reduced probability from 0.3 to 0.2
                 A.GridDistortion(p=1.0),                   # Grid distortion
-                A.OpticalDistortion(distort_limit=0.05, p=1.0),  # Optical distortion without shift_limit
-                A.Cutout(num_holes=8, max_h_size=32, max_w_size=32, p=1.0),  # Replaces CoarseDropout
-            ], p=0.3),
+                A.OpticalDistortion(distort_limit=0.03, p=1.0),  # Reduced distortion
+                A.CoarseDropout(p=1.0),                    # Randomly drop patches with default parameters
+            ], p=0.2),
             
             # Final normalization
             normalisation, 
