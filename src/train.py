@@ -28,13 +28,13 @@ dir_checkpoint = Path('src/models/checkpoints/')
 
 def get_model(args):
     if args.model == 'unet':
-        model = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+        model = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear, dropout_rate=args.dropout)
     elif args.model == 'clip':
         model = CLIPSegmentationModel(n_classes=args.classes)
     elif args.model == 'autoencoder':
         model = Autoencoder(n_channels=3, n_classes=args.classes)
     elif args.model == 'point_unet':
-        model = PointUNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+        model = PointUNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear, dropout_rate=args.dropout)
     else:
         raise ValueError(f"Unsupported model: {args.model}")
     
@@ -97,7 +97,7 @@ def train_model(
     experiment.config.update(
         dict(epochs=epochs, batch_size=batch_size, learning_rate=learning_rate, weight_decay=weight_decay,
              val_percent=val_percent, save_checkpoint=save_checkpoint, img_dim=img_dim, model=model.__class__.__name__, 
-             amp=amp, optimizer=optimizer, dropout=0, is_point_model=is_point_model)
+             amp=amp, optimizer=optimizer, dropout=model.dropout_rate if hasattr(model, 'dropout_rate') else 0, is_point_model=is_point_model)
     )
 
     logging.info(f'''Starting training:
@@ -108,6 +108,7 @@ def train_model(
         Learning rate:   {learning_rate}
         Weight decay:    {weight_decay}
         Optimizer:       {optimizer}
+        Dropout rate:    {model.dropout_rate if hasattr(model, 'dropout_rate') else 0}
         Training size:   {len(train_set)}
         Validation size: {len(val_set)}
         Checkpoints:     {save_checkpoint}
@@ -432,6 +433,7 @@ def get_args():
     parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
     parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip', 'autoencoder', 'point_unet'], default='unet', help='Choose model')
     parser.add_argument('--class-weights', '-cw', type=float, nargs='+', default=None, help='Class weights, space-separated (e.g., -cw 0.1 0.8 0.6)')
+    parser.add_argument('--dropout', '-d', type=float, default=0.0, help='Dropout rate (0.0 to 0.5 recommended)')
 
     return parser.parse_args()
 
@@ -460,12 +462,13 @@ if __name__ == '__main__':
         logging.info(f'Network:\n'
                     f'\t{model.n_channels} input channels\n'
                     f'\t{model.n_classes} output channels (classes)\n'
-                    f'\tPointUNet with two-phase training')
+                    f'\tPointUNet with dropout rate: {model.dropout_rate}')
     else:  # UNet model
         logging.info(f'Network:\n'
                     f'\t{model.n_channels} input channels\n'
                     f'\t{model.n_classes} output channels (classes)\n'
-                    f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling')
+                    f'\t{"Bilinear" if model.bilinear else "Transposed conv"} upscaling\n'
+                    f'\tDropout rate: {model.dropout_rate}')
 
     if args.load:
         state_dict = torch.load(args.load, map_location=device, weights_only=True)

@@ -8,18 +8,32 @@ import torch.nn.functional as F
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
 
-    def __init__(self, in_channels, out_channels, mid_channels=None):
+    def __init__(self, in_channels, out_channels, mid_channels=None, dropout_rate=0.0):
         super().__init__()
         if not mid_channels:
             mid_channels = out_channels
-        self.double_conv = nn.Sequential(
+        
+        layers = [
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(mid_channels),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True)
+        ]
+        
+        # Add dropout after the first conv block if dropout_rate > 0
+        if dropout_rate > 0:
+            layers.append(nn.Dropout2d(dropout_rate))
+            
+        layers.extend([
             nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
-        )
+        ])
+        
+        # Add dropout after the second conv block if dropout_rate > 0
+        if dropout_rate > 0:
+            layers.append(nn.Dropout2d(dropout_rate))
+            
+        self.double_conv = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.double_conv(x)
@@ -28,11 +42,11 @@ class DoubleConv(nn.Module):
 class Down(nn.Module):
     """Downscaling with maxpool then double conv"""
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, dropout_rate=0.0):
         super().__init__()
         self.maxpool_conv = nn.Sequential(
             nn.MaxPool2d(2),
-            DoubleConv(in_channels, out_channels)
+            DoubleConv(in_channels, out_channels, dropout_rate=dropout_rate)
         )
 
     def forward(self, x):
@@ -42,16 +56,16 @@ class Down(nn.Module):
 class Up(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels, bilinear=True):
+    def __init__(self, in_channels, out_channels, bilinear=True, dropout_rate=0.0):
         super().__init__()
 
         # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
+            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2, dropout_rate=dropout_rate)
         else:
             self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-            self.conv = DoubleConv(in_channels, out_channels)
+            self.conv = DoubleConv(in_channels, out_channels, dropout_rate=dropout_rate)
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
@@ -79,22 +93,23 @@ class OutConv(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=False):
+    def __init__(self, n_channels, n_classes, bilinear=False, dropout_rate=0.0):
         super(UNet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
+        self.dropout_rate = dropout_rate
 
-        self.inc = (DoubleConv(n_channels, 64))
-        self.down1 = (Down(64, 128))
-        self.down2 = (Down(128, 256))
-        self.down3 = (Down(256, 512))
+        self.inc = (DoubleConv(n_channels, 64, dropout_rate=dropout_rate))
+        self.down1 = (Down(64, 128, dropout_rate=dropout_rate))
+        self.down2 = (Down(128, 256, dropout_rate=dropout_rate))
+        self.down3 = (Down(256, 512, dropout_rate=dropout_rate))
         factor = 2 if bilinear else 1
-        self.down4 = (Down(512, 1024 // factor))
-        self.up1 = (Up(1024, 512 // factor, bilinear))
-        self.up2 = (Up(512, 256 // factor, bilinear))
-        self.up3 = (Up(256, 128 // factor, bilinear))
-        self.up4 = (Up(128, 64, bilinear))
+        self.down4 = (Down(512, 1024 // factor, dropout_rate=dropout_rate))
+        self.up1 = (Up(1024, 512 // factor, bilinear, dropout_rate=dropout_rate))
+        self.up2 = (Up(512, 256 // factor, bilinear, dropout_rate=dropout_rate))
+        self.up3 = (Up(256, 128 // factor, bilinear, dropout_rate=dropout_rate))
+        self.up4 = (Up(128, 64, bilinear, dropout_rate=dropout_rate))
         self.outc = (OutConv(64, n_classes))
 
     def forward(self, x):
@@ -128,9 +143,9 @@ class PointUNet(UNet):
     UNet architecture modified to use point prompts.
     The model takes both an image and a point heatmap as input.
     """
-    def __init__(self, n_channels, n_classes, bilinear=False):
+    def __init__(self, n_channels, n_classes, bilinear=False, dropout_rate=0.0):
         # Call parent constructor with n_channels + 1 (for the point heatmap)
-        super().__init__(n_channels + 1, n_classes, bilinear)
+        super().__init__(n_channels + 1, n_classes, bilinear, dropout_rate)
         self.n_image_channels = n_channels
         self.is_point_model = True  # Flag to identify point models
         
