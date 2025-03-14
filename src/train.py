@@ -7,7 +7,7 @@ from torch import optim
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, StepLR, ReduceLROnPlateau, _LRScheduler
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
@@ -41,6 +41,59 @@ def get_model(args):
     model = model.to(memory_format=torch.channels_last)
     return model
 
+# Add a custom warmup scheduler class
+class CosineAnnealingWarmupRestarts(_LRScheduler):
+    """
+    Cosine annealing with warm restarts and linear warmup.
+    
+    Args:
+        optimizer (Optimizer): Wrapped optimizer.
+        warmup_epochs (int): Number of epochs for warmup.
+        total_epochs (int): Total number of epochs for training.
+        min_lr (float): Minimum learning rate.
+        first_cycle_ratio (float): Ratio of the first cycle length to total epochs.
+        cycle_mult (float): Multiplier for cycle lengths after the first.
+        last_epoch (int): The index of the last epoch. Default: -1.
+    """
+    def __init__(self, optimizer, warmup_epochs, total_epochs, min_lr=1e-6, 
+                 first_cycle_ratio=0.3, cycle_mult=2.0, last_epoch=-1):
+        self.warmup_epochs = warmup_epochs
+        self.total_epochs = total_epochs
+        self.min_lr = min_lr
+        self.first_cycle_ratio = first_cycle_ratio
+        self.cycle_mult = cycle_mult
+        self.base_max_lrs = [group['lr'] for group in optimizer.param_groups]
+        super(CosineAnnealingWarmupRestarts, self).__init__(optimizer, last_epoch)
+        
+    def get_lr(self):
+        if self.last_epoch < self.warmup_epochs:
+            # Linear warmup
+            alpha = self.last_epoch / self.warmup_epochs
+            return [base_max_lr * alpha for base_max_lr in self.base_max_lrs]
+        else:
+            # Cosine annealing with warm restarts
+            epoch_adjusted = self.last_epoch - self.warmup_epochs
+            first_cycle = int(self.total_epochs * self.first_cycle_ratio)
+            
+            # Determine cycle and where we are in the cycle
+            if epoch_adjusted < first_cycle:
+                cycle_length = first_cycle
+                cycle_epoch = epoch_adjusted
+            else:
+                # For subsequent cycles
+                epoch_after_first = epoch_adjusted - first_cycle
+                cycle_length_after_first = first_cycle * self.cycle_mult
+                cycle_idx = int(epoch_after_first / cycle_length_after_first) + 1
+                cycle_length = first_cycle * (self.cycle_mult ** cycle_idx)
+                cycle_epoch = epoch_after_first % cycle_length_after_first
+            
+            # Compute cosine component
+            cosine_factor = 0.5 * (1 + torch.cos(torch.tensor(cycle_epoch / cycle_length * torch.pi)))
+            
+            # Compute learning rate
+            return [self.min_lr + (base_max_lr - self.min_lr) * cosine_factor 
+                    for base_max_lr in self.base_max_lrs]
+
 def train_model(
         model,
         device,
@@ -54,7 +107,15 @@ def train_model(
         save_checkpoint: bool = False,
         img_dim: int = 256,
         amp: bool = False,
-        gradient_clipping: float = 1.0
+        gradient_clipping: float = 1.0,
+        lr_scheduler: str = 'cosine',
+        warmup_epochs: int = 0,
+        min_lr: float = 1e-6,
+        scheduler_patience: int = 5,
+        scheduler_factor: float = 0.1,
+        step_size: int = 30,
+        t0: int = 10,
+        t_mult: int = 2
 ):
     # Create checkpoint directory at the beginning to avoid repeated checks
     os.makedirs(dir_checkpoint, exist_ok=True)
@@ -129,7 +190,20 @@ def train_model(
     else:
         raise ValueError(f"Unsupported optimizer: {args.optimizer}")
 
-    scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, T_mult=2)
+    # Set up the learning rate scheduler based on the selected type
+    if lr_scheduler == 'none':
+        scheduler = None
+    elif lr_scheduler == 'cosine':
+        scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=t0, T_mult=t_mult)
+    elif lr_scheduler == 'cosine_warmup':
+        scheduler = CosineAnnealingWarmupRestarts(optimizer, warmup_epochs=warmup_epochs, 
+                                                  total_epochs=epochs, min_lr=min_lr)
+    elif lr_scheduler == 'step':
+        scheduler = StepLR(optimizer, step_size=step_size, gamma=scheduler_factor)
+    elif lr_scheduler == 'plateau':
+        scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=scheduler_factor, 
+                                       patience=scheduler_patience, min_lr=min_lr)
+    
     grad_scaler = GradScaler(enabled=amp)
     criterion = nn.CrossEntropyLoss(ignore_index=255, weight=class_weights) if model.n_classes > 1 else nn.BCEWithLogitsLoss()
     global_step = 0
@@ -327,16 +401,18 @@ def train_model(
             )
             
             # Update scheduler
-            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler.step(val_iou)
-            else:
-                scheduler.step()
+            if scheduler is not None:
+                if isinstance(scheduler, ReduceLROnPlateau):
+                    scheduler.step(val_iou)
+                else:
+                    scheduler.step()
 
             # Log validation metrics
             experiment.log({
                 'validation Dice (avg)': val_dice,
                 'validation IoU (avg)': val_iou,
                 'validation Pixel Accuracy': val_acc,
+                'learning_rate': optimizer.param_groups[0]['lr'],  # Log current learning rate
                 **{f'validation Dice class {i}': val_dice_per_class[i].item() for i in range(model.n_classes)},
                 **{f'validation IoU class {i}': val_iou_per_class[i].item() for i in range(model.n_classes)},
                 'epoch': epoch
@@ -434,6 +510,16 @@ def get_args():
     parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip', 'autoencoder', 'point_unet'], default='unet', help='Choose model')
     parser.add_argument('--class-weights', '-cw', type=float, nargs='+', default=None, help='Class weights, space-separated (e.g., -cw 0.1 0.8 0.6)')
     parser.add_argument('--dropout', '-d', type=float, default=0.0, help='Dropout rate (0.0 to 0.5 recommended)')
+    # Add new arguments for learning rate scheduling
+    parser.add_argument('--lr-scheduler', type=str, choices=['cosine', 'cosine_warmup', 'step', 'plateau', 'none'], 
+                        default='cosine', help='Learning rate scheduler type')
+    parser.add_argument('--warmup-epochs', type=int, default=0, help='Number of warmup epochs')
+    parser.add_argument('--min-lr', type=float, default=1e-6, help='Minimum learning rate for schedulers')
+    parser.add_argument('--scheduler-patience', type=int, default=5, help='Patience for ReduceLROnPlateau scheduler')
+    parser.add_argument('--scheduler-factor', type=float, default=0.1, help='Factor for ReduceLROnPlateau scheduler')
+    parser.add_argument('--step-size', type=int, default=30, help='Step size for StepLR scheduler')
+    parser.add_argument('--t0', type=int, default=10, help='T_0 for CosineAnnealingWarmRestarts')
+    parser.add_argument('--t-mult', type=int, default=2, help='T_mult for CosineAnnealingWarmRestarts')
 
     return parser.parse_args()
 
@@ -497,7 +583,15 @@ if __name__ == '__main__':
             device=device,
             img_dim=args.img_dim,
             val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            lr_scheduler=args.lr_scheduler,
+            warmup_epochs=args.warmup_epochs,
+            min_lr=args.min_lr,
+            scheduler_patience=args.scheduler_patience,
+            scheduler_factor=args.scheduler_factor,
+            step_size=args.step_size,
+            t0=args.t0,
+            t_mult=args.t_mult
         )
     except torch.cuda.OutOfMemoryError:
         logging.error('Detected OutOfMemoryError! '
@@ -516,5 +610,13 @@ if __name__ == '__main__':
             device=device,
             img_dim=args.img_dim,
             val_percent=args.val / 100,
-            amp=args.amp
+            amp=args.amp,
+            lr_scheduler=args.lr_scheduler,
+            warmup_epochs=args.warmup_epochs,
+            min_lr=args.min_lr,
+            scheduler_patience=args.scheduler_patience,
+            scheduler_factor=args.scheduler_factor,
+            step_size=args.step_size,
+            t0=args.t0,
+            t_mult=args.t_mult
         )

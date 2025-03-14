@@ -148,20 +148,34 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
         augmentation = A.Compose([
             resizing,
             
-            #### ADD AUGMENTATION HERE ####
+            #### ENHANCED AUGMENTATION PIPELINE ####
             
-            # A.RandomCrop(img_dim, img_dim),  # Crop to fixed size
-            A.HorizontalFlip(p=0.5),  # Flip images & masks with 50% probability
-            A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
-            # A.ElasticTransform(alpha=1, sigma=50, p=0.1),  # Elastic distortion
-            # A.GridDistortion(p=0.3),  # Slight grid warping
-            # A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
-            # A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
-            # A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
-            # A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
+            # Geometric transforms
+            A.HorizontalFlip(p=0.5),                       # Flip images & masks with 50% probability
+            A.Rotate(limit=25, p=0.7),                     # Random rotation (-25° to 25°) with higher probability
+            A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.15, rotate_limit=15, p=0.5),  # More geometric diversity
+            A.ElasticTransform(alpha=120, sigma=120 * 0.05, alpha_affine=120 * 0.03, p=0.3),  # Elastic distortion
             
-            ### END AUGMENTATION ###
+            # Color and contrast transforms (only applied to images, not masks)
+            A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),  # Light adjustments
+            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color variation
+            A.HueSaturationValue(hue_shift_limit=10, sat_shift_limit=15, val_shift_limit=10, p=0.3),  # More color variety
             
+            # Noise and blur for robustness
+            A.OneOf([                                      # Apply one of these with 40% probability
+                A.GaussianBlur(blur_limit=(3, 7), p=1.0),  # Gaussian blur
+                A.MotionBlur(blur_limit=7, p=1.0),         # Motion blur
+                A.GaussNoise(var_limit=(10, 50), p=1.0),   # Random noise
+            ], p=0.4),
+            
+            # Advanced augmentations for small objects (helps with cats)
+            A.OneOf([                                      # Apply one of these with 30% probability
+                A.GridDistortion(p=1.0),                   # Grid distortion
+                A.OpticalDistortion(distort_limit=0.05, shift_limit=0.05, p=1.0),  # Optical distortion
+                A.CoarseDropout(max_holes=8, max_height=32, max_width=32, p=1.0),  # Randomly drop patches
+            ], p=0.3),
+            
+            # Final normalization
             normalisation, 
             ToTensorV2()  # Convert to PyTorch tensor
         ])
