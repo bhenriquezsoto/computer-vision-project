@@ -4,11 +4,9 @@ import numpy as np
 import torch.nn.functional as F
 from PIL import Image
 import cv2
-import os
-from pathlib import Path
 
 from models.unet_model import PointUNet
-from data_loading import load_image, preprocessing
+from data_loading import preprocessing
 
 def load_model(model_path, device):
     """Load the point segmentation model"""

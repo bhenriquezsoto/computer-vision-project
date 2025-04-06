@@ -63,7 +63,7 @@ def train_model(
     all_images = list(dir_img.glob('*'))
     all_masks = list(dir_mask.glob('*'))
     
-    # Match images and masks by their base names using the new helper function
+    # Match images and masks
     matched_images, matched_masks = sort_and_match_files(all_images, all_masks)
     
     # Now split the matched pairs
