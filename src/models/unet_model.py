@@ -8,18 +8,32 @@ import torch.nn.functional as F
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
 
-    def __init__(self, in_channels, out_channels, mid_channels=None):
+    def __init__(self, in_channels, out_channels, mid_channels=None, dropout_rate=0.0):
         super().__init__()
         if not mid_channels:
             mid_channels = out_channels
-        self.double_conv = nn.Sequential(
+        
+        layers = [
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(mid_channels),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=True)
+        ]
+        
+        # Add dropout after the first conv block if dropout_rate > 0
+        if dropout_rate > 0:
+            layers.append(nn.Dropout2d(dropout_rate))
+            
+        layers.extend([
             nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ReLU(inplace=True)
-        )
+        ])
+        
+        # Add dropout after the second conv block if dropout_rate > 0
+        if dropout_rate > 0:
+            layers.append(nn.Dropout2d(dropout_rate))
+            
+        self.double_conv = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.double_conv(x)
@@ -28,11 +42,11 @@ class DoubleConv(nn.Module):
 class Down(nn.Module):
     """Downscaling with maxpool then double conv"""
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, dropout_rate=0.0):
         super().__init__()
         self.maxpool_conv = nn.Sequential(
             nn.MaxPool2d(2),
-            DoubleConv(in_channels, out_channels)
+            DoubleConv(in_channels, out_channels, dropout_rate=dropout_rate)
         )
 
     def forward(self, x):
@@ -42,16 +56,16 @@ class Down(nn.Module):
 class Up(nn.Module):
     """Upscaling then double conv"""
 
-    def __init__(self, in_channels, out_channels, bilinear=True):
+    def __init__(self, in_channels, out_channels, bilinear=True, dropout_rate=0.0):
         super().__init__()
 
         # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2)
+            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2, dropout_rate=dropout_rate)
         else:
             self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-            self.conv = DoubleConv(in_channels, out_channels)
+            self.conv = DoubleConv(in_channels, out_channels, dropout_rate=dropout_rate)
 
     def forward(self, x1, x2):
         x1 = self.up(x1)
@@ -79,22 +93,23 @@ class OutConv(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=False):
+    def __init__(self, n_channels, n_classes, bilinear=False, dropout_rate=0.0):
         super(UNet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
         self.bilinear = bilinear
+        self.dropout_rate = dropout_rate
 
-        self.inc = (DoubleConv(n_channels, 64))
-        self.down1 = (Down(64, 128))
-        self.down2 = (Down(128, 256))
-        self.down3 = (Down(256, 512))
+        self.inc = (DoubleConv(n_channels, 64, dropout_rate=dropout_rate))
+        self.down1 = (Down(64, 128, dropout_rate=dropout_rate))
+        self.down2 = (Down(128, 256, dropout_rate=dropout_rate))
+        self.down3 = (Down(256, 512, dropout_rate=dropout_rate))
         factor = 2 if bilinear else 1
-        self.down4 = (Down(512, 1024 // factor))
-        self.up1 = (Up(1024, 512 // factor, bilinear))
-        self.up2 = (Up(512, 256 // factor, bilinear))
-        self.up3 = (Up(256, 128 // factor, bilinear))
-        self.up4 = (Up(128, 64, bilinear))
+        self.down4 = (Down(512, 1024 // factor, dropout_rate=dropout_rate))
+        self.up1 = (Up(1024, 512 // factor, bilinear, dropout_rate=dropout_rate))
+        self.up2 = (Up(512, 256 // factor, bilinear, dropout_rate=dropout_rate))
+        self.up3 = (Up(256, 128 // factor, bilinear, dropout_rate=dropout_rate))
+        self.up4 = (Up(128, 64, bilinear, dropout_rate=dropout_rate))
         self.outc = (OutConv(64, n_classes))
 
     def forward(self, x):
@@ -121,6 +136,46 @@ class UNet(nn.Module):
         self.up3 = torch.utils.checkpoint(self.up3)
         self.up4 = torch.utils.checkpoint(self.up4)
         self.outc = torch.utils.checkpoint(self.outc)
+    
+
+class PointUNet(UNet):
+    """
+    UNet architecture modified to use point prompts.
+    The model takes both an image and a point heatmap as input.
+    """
+    def __init__(self, n_channels, n_classes, bilinear=False, dropout_rate=0.0):
+        # Call parent constructor with n_channels + 1 (for the point heatmap)
+        super().__init__(n_channels + 1, n_classes, bilinear, dropout_rate)
+        self.n_image_channels = n_channels
+        self.is_point_model = True  # Flag to identify point models
+        
+    def forward(self, x, point_heatmap):
+        """
+        Forward pass that takes both image and point heatmap.
+        
+        Args:
+            x (torch.Tensor): Image tensor of shape (B, C, H, W)
+            point_heatmap (torch.Tensor): Point heatmap of shape (B, 1, H, W)
+            
+        Returns:
+            torch.Tensor: Segmentation logits
+        """
+        # Concatenate image and point heatmap along the channel dimension
+        x_combined = torch.cat([x, point_heatmap], dim=1)
+        
+        # Then perform standard UNet forward pass
+        x1 = self.inc(x_combined)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        x = self.up1(x5, x4)
+        x = self.up2(x, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+        logits = self.outc(x)
+        
+        return logits
     
 
 

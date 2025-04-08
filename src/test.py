@@ -6,10 +6,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from metrics import compute_metrics
-from models.unet_model import UNet
+from models.unet_model import UNet, PointUNet
 from models.clip_model import CLIPSegmentationModel
 from models.autoencoder_model import Autoencoder
-from data_loading import TestSegmentationDataset, sort_and_match_files
+from data_loading import TestSegmentationDataset, TestPointSegmentationDataset, sort_and_match_files
 
 # Set up directories
 dir_test_img = Path('Dataset/Test/color')
@@ -26,7 +26,8 @@ def evaluate_model(
     test_mask_dir=dir_test_mask,
     results_path=None,
     model_path=None,
-    in_training=False
+    in_training=False,
+    is_point_model=False
 ):
     """
     Evaluate a model on the test dataset.
@@ -42,6 +43,7 @@ def evaluate_model(
         results_path: Path to save results (if None, derived from model_path)
         model_path: Path of the model (used for generating results_path if needed)
         in_training: Whether the evaluation is in training phase
+        is_point_model: Whether the model is a point-based model
     Returns:
         Tuple of (mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class)
     """
@@ -65,8 +67,12 @@ def evaluate_model(
     # Sort and match test images and masks
     test_img_files, test_mask_files = sort_and_match_files(test_img_files, test_mask_files)
     
-    # Create test dataset and dataloader
-    test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)
+    # Create test dataset and dataloader based on model type
+    if is_point_model:
+        test_dataset = TestPointSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)
+    else:
+        test_dataset = TestSegmentationDataset(test_img_files, test_mask_files, dim=img_dim)
+    
     loader_args = dict(num_workers=os.cpu_count(), pin_memory=True)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, **loader_args)
     
@@ -75,7 +81,7 @@ def evaluate_model(
     
     # Run evaluation using compute_metrics from metrics.py
     mean_dice, mean_iou, mean_acc, dice_per_class, iou_per_class = compute_metrics(
-        model, test_loader, device, amp, dim=img_dim, n_classes=n_classes, desc='Testing round'
+        model, test_loader, device, amp, dim=img_dim, n_classes=n_classes, desc='Testing round', is_point_model=is_point_model
     )
     
     # Print results
@@ -119,7 +125,7 @@ def evaluate_model(
 def get_args():
     parser = argparse.ArgumentParser(description='Test a trained model on the test set')
     parser.add_argument('--model-path', '-m', type=str, required=True, help='Path to the saved model (.pth file)')
-    parser.add_argument('--model-type', '-t', type=str, choices=['unet', 'clip', 'autoencoder'], default='unet', 
+    parser.add_argument('--model-type', '-t', type=str, choices=['unet', 'clip', 'autoencoder', 'point_unet'], default='unet', 
                        help='Type of model to test')
     parser.add_argument('--img-dim', '-s', type=int, default=256, help='Image dimension')
     parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
@@ -139,6 +145,7 @@ def main():
     logging.info(f'Using device {device}')
     
     # Initialize model based on type
+    is_point_model = False
     if args.model_type == 'unet':
         model = UNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
     elif args.model_type == 'clip':
@@ -147,6 +154,9 @@ def main():
         model = Autoencoder(n_channels=3, n_classes=args.classes)
         # Ensure we're in segmentation phase for testing
         model.set_phase("segmentation")
+    elif args.model_type == 'point_unet':
+        model = PointUNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+        is_point_model = True
     else:
         raise ValueError(f"Unsupported model type: {args.model_type}")
     
@@ -171,7 +181,8 @@ def main():
         amp=args.amp,
         n_classes=args.classes,
         results_path=results_path,
-        model_path=args.model_path
+        model_path=args.model_path,
+        is_point_model=is_point_model
     )
 
 if __name__ == '__main__':
