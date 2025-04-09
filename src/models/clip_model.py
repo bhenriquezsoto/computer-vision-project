@@ -85,7 +85,6 @@ class CLIPSegmentationModel(nn.Module):
         projected = self.projector(clip_feat)  # [B, C * H * W]
         B, C, H, W = image.shape[0], *self.bottleneck_shape
         x = projected.view(B, C, H, W)  # [B, C, H, W]
-        print("billinear", self.bilinear)
 
         return self.decoder(x)
     
@@ -208,9 +207,11 @@ class Up(nn.Module):
 
         # if bilinear, use the normal convolutions to reduce the number of channels
         if bilinear:
+            print("bilinear", in_channels)
             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
             self.conv = DoubleConv(in_channels, out_channels, in_channels // 2, dropout_rate=dropout_rate)
         else:
+            print("Not bilinear, in_channels", in_channels)
             self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
             self.conv = DoubleConv(in_channels, out_channels, dropout_rate=dropout_rate)
 
@@ -265,7 +266,7 @@ class UNetDecoder(nn.Module):
             self.up4 = (Up(128, 64, bilinear, dropout_rate=dropout_rate))
             
         else:
-            print("here")
+            print("here_not_skips")
             self.up1 = (Up(1024 // factor, 512 // factor, bilinear, dropout_rate=dropout_rate))
             self.up2 = (Up(512 // factor, 256 // factor, bilinear, dropout_rate=dropout_rate))
             self.up3 = (Up(256 // factor, 128 // factor, bilinear, dropout_rate=dropout_rate))
