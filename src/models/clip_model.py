@@ -40,7 +40,7 @@ class CLIPSegmentationModelBad(nn.Module):
     
     
 class CLIPSegmentationModel(nn.Module):
-    def __init__(self, num_classes=3, image_size=256, bilinear=True):
+    def __init__(self, num_classes=3, image_size=256, bilinear=True, dropout_rate=0.0):
         """
         CLIP-only segmentation model. Uses CLIP's image encoder,
         projects the embedding to a spatial feature map, and
@@ -62,6 +62,7 @@ class CLIPSegmentationModel(nn.Module):
             n_classes=num_classes,
             bilinear=bilinear,
             use_skips=False,
+            dropout_rate=dropout_rate
         )
 
     def forward(self, image):
@@ -82,8 +83,10 @@ class CLIPSegmentationModel(nn.Module):
     
 
 class CLIPUNet(nn.Module):
-    def __init__(self, in_channels=3, n_classes=3, image_size=256, bilinear=True, use_skips=True, dropout_rate=0.0):
+    def __init__(self, in_channels=3, n_classes=3, image_size=256, bilinear=True, use_skips=True, dropout_rate=0.0, fuse_clip=True):
         super(CLIPUNet, self).__init__()
+        
+        self.fuse_clip = fuse_clip
         
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
@@ -118,8 +121,15 @@ class CLIPUNet(nn.Module):
         B, C, H, W = x.shape[0], *self.bottleneck_shape
         clip_out = projected.view(B, C, H, W)  # [B, C, H, W]
         
-        x = torch.cat([encoder_out, clip_out], dim=1)  # Concatenate encoder output and CLIP output
-        x = self.decoder(x, skips)
+        assert encoder_out.shape == clip_out.shape, f"Encoder output shape {encoder_out.shape} does not match CLIP output shape {clip_out.shape}"
+        
+        # x = torch.cat([encoder_out, clip_out], dim=1)  # Concatenate encoder output and CLIP output
+        if self.fuse_clip:
+            x = encoder_out + clip_out  # Add encoder output and CLIP output
+        else:
+            x = clip_out
+        
+        return self.decoder(x, skips)
         
         
     
