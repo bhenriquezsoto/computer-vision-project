@@ -84,6 +84,10 @@ class CLIPSegmentationModel(nn.Module):
 
         projected = self.projector(clip_feat)  # [B, C * H * W]
         B, C, H, W = image.shape[0], *self.bottleneck_shape
+        print("NUMBER OF CHANNELS:", C)
+        print("Size clip_feat", clip_feat.shape)
+        print("Size projected", projected.shape)
+        print("Size image", image.shape)
         x = projected.view(B, C, H, W)  # [B, C, H, W]
 
         return self.decoder(x)
