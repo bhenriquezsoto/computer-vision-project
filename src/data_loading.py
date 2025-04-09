@@ -153,8 +153,8 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
             # A.RandomCrop(img_dim, img_dim),  # Crop to fixed size
             A.HorizontalFlip(p=0.5),  # Flip images & masks with 50% probability
             A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
-            # A.ElasticTransform(alpha=1, sigma=50, p=0.1),  # Elastic distortion
-            # A.GridDistortion(p=0.3),  # Slight grid warping
+            A.ElasticTransform(p=0.2),  # Elastic distortion
+            A.GridDistortion(p=0.2),  # Slight grid warping
             # A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
             # A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
             # A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
