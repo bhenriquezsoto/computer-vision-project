@@ -45,6 +45,8 @@ class CLIPSegmentationModel(nn.Module):
         image = F.interpolate(image, size=(224, 224), mode='bilinear', align_corners=False)
         with torch.no_grad():
             clip_feat = self.clip_model.encode_image(image)  # [B, 512]
+            # Convert from half precision (float16) to full precision (float32)
+            clip_feat = clip_feat.float()  # Explicitly convert to float32
 
         projected = self.projector(clip_feat)  # [B, C * H * W]
         B, C, H, W = image.shape[0], *self.bottleneck_shape
@@ -297,6 +299,8 @@ class PointCLIPUNet(CLIPUNet):
         # Get CLIP features
         with torch.no_grad():
             clip_feat = self.clip_model.encode_image(resized_x)
+            # Convert from half precision (float16) to full precision (float32)
+            clip_feat = clip_feat.float()  # Explicitly convert to float32
 
         # Project CLIP features to the bottleneck shape
         projected = self.projector(clip_feat)  # [B, C * H * W]

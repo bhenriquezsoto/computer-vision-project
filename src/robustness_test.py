@@ -363,11 +363,25 @@ def evaluate_robustness(model, device, test_images, test_masks, perturbation_typ
                 original_shape = masks.shape[-2:]
                 
                 # Handle point model input
-                if is_point_model:
-                    points = batch['point'].to(device=device, dtype=torch.float32)
-                    outputs = model(images, points)
-                else:
-                    outputs = model(images)
+                try:
+                    if is_point_model:
+                        points = batch['point'].to(device=device, dtype=torch.float32)
+                        outputs = model(images, points)
+                    else:
+                        outputs = model(images)
+                except RuntimeError as e:
+                    if "must have the same dtype" in str(e):
+                        logging.error(f"Data type mismatch error: {e}")
+                        logging.error("This is likely a precision mismatch between CLIP (FP16) and the rest of the model (FP32).")
+                        logging.error("Verify that all CLIP outputs are properly converted to float32 before further processing.")
+                        raise
+                    elif "expected scalar type Half but found Float" in str(e):
+                        logging.error(f"CLIP model expects half precision but received full precision: {e}")
+                        logging.error("Try converting inputs to half precision before passing to CLIP.")
+                        raise
+                    else:
+                        logging.error(f"Error during model forward pass: {e}")
+                        continue  # Skip this batch and continue with next
                 
                 # Get predictions
                 if outputs.shape[1] > 1:  # Multi-class
