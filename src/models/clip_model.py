@@ -52,6 +52,7 @@ class CLIPSegmentationModel(nn.Module):
         self.n_channels = 3
         self.image_size = image_size
         self.bilinear = bilinear
+        print("bilinear", bilinear)
         self.dropout_rate = dropout_rate
         
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
