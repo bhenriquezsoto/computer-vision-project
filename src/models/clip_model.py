@@ -248,12 +248,28 @@ class UNetDecoder(nn.Module):
         super(UNetDecoder, self).__init__()
         
         factor = 2 if bilinear else 1
-        skip_factor = 2 if (not use_skips) and bilinear else 1
+        skip_factor = 2 if ((not use_skips) and bilinear) else 1
         
-        self.up1 = (Up(1024 // skip_factor, 512 // factor, bilinear, dropout_rate=dropout_rate))
-        self.up2 = (Up(512 // skip_factor, 256 // factor, bilinear, dropout_rate=dropout_rate))
-        self.up3 = (Up(256 // skip_factor, 128 // factor, bilinear, dropout_rate=dropout_rate))
-        self.up4 = (Up(128 // skip_factor, 64, bilinear, dropout_rate=dropout_rate))
+        # self.up1 = (Up(1024 // skip_factor, 512 // factor, bilinear, dropout_rate=dropout_rate))
+        # self.up2 = (Up(512 // skip_factor, 256 // factor, bilinear, dropout_rate=dropout_rate))
+        # self.up3 = (Up(256 // skip_factor, 128 // factor, bilinear, dropout_rate=dropout_rate))
+        # self.up4 = (Up(128 // skip_factor, 64, bilinear, dropout_rate=dropout_rate))
+        # self.outc = (OutConv(64, n_classes))
+        print("factor", factor)
+        if use_skips:
+            print("here")
+            self.up1 = (Up(1024, 512 // factor, bilinear, dropout_rate=dropout_rate))
+            self.up2 = (Up(512, 256 // factor, bilinear, dropout_rate=dropout_rate))
+            self.up3 = (Up(256, 128 // factor, bilinear, dropout_rate=dropout_rate))
+            self.up4 = (Up(128, 64, bilinear, dropout_rate=dropout_rate))
+            
+        else:
+            print("here")
+            self.up1 = (Up(1024 // factor, 512 // factor, bilinear, dropout_rate=dropout_rate))
+            self.up2 = (Up(512 // factor, 256 // factor, bilinear, dropout_rate=dropout_rate))
+            self.up3 = (Up(256 // factor, 128 // factor, bilinear, dropout_rate=dropout_rate))
+            self.up4 = (Up(128 // factor, 64, bilinear, dropout_rate=dropout_rate))
+            
         self.outc = (OutConv(64, n_classes))
         
         
