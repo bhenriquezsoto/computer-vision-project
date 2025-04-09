@@ -40,7 +40,7 @@ class CLIPSegmentationModelBad(nn.Module):
     
     
 class CLIPSegmentationModel(nn.Module):
-    def __init__(self, num_classes=3, image_size=256, bilinear=True, dropout_rate=0.0):
+    def __init__(self, n_classes=3, image_size=256, bilinear=True, dropout_rate=0.0):
         """
         CLIP-only segmentation model. Uses CLIP's image encoder,
         projects the embedding to a spatial feature map, and
@@ -59,7 +59,7 @@ class CLIPSegmentationModel(nn.Module):
 
         self.projector = nn.Linear(512, C * H * W)
         self.decoder = UNetDecoder(
-            n_classes=num_classes,
+            n_classes=n_classes,
             bilinear=bilinear,
             use_skips=False,
             dropout_rate=dropout_rate
@@ -83,7 +83,7 @@ class CLIPSegmentationModel(nn.Module):
     
 
 class CLIPUNet(nn.Module):
-    def __init__(self, in_channels=3, n_classes=3, image_size=256, bilinear=True, use_skips=True, dropout_rate=0.0, fuse_clip=True):
+    def __init__(self, n_channels=3, n_classes=3, image_size=256, bilinear=True, use_skips=True, dropout_rate=0.0, fuse_clip=True):
         super(CLIPUNet, self).__init__()
         
         self.fuse_clip = fuse_clip
@@ -99,7 +99,7 @@ class CLIPUNet(nn.Module):
         self.projector = nn.Linear(512, C * H * W)
         
         self.encoder = UNetEncoder(
-            in_channels=in_channels, 
+            in_channels=n_channels, 
             n_classes=n_classes, 
             bilinear=bilinear, 
             dropout_rate=dropout_rate)

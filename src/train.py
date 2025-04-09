@@ -32,9 +32,9 @@ def get_model(args):
     elif args.model == 'clip':
         model = CLIPSegmentationModel(n_classes=args.classes, image_size=args.img_dim, bilinear=args.bilinear, dropout_rate=args.dropout)
     elif args.model == 'clip_unet':
-        model = CLIPUNet(in_channels=3, n_classes=args.classes, image_size=args.img_dim, bilinear=args.bilinear, dropout_rate=args.dropout, fuse_clip=False)
+        model = CLIPUNet(n_channels=3, n_classes=args.classes, image_size=args.img_dim, bilinear=args.bilinear, dropout_rate=args.dropout, fuse_clip=False)
     elif args.model == 'clip_unet_fuse':
-        model = CLIPUNet(in_channels=3, n_classes=args.classes, image_size=args.img_dim, bilinear=args.bilinear, dropout_rate=args.dropout, fuse_clip=True)
+        model = CLIPUNet(n_channels=3, n_classes=args.classes, image_size=args.img_dim, bilinear=args.bilinear, dropout_rate=args.dropout, fuse_clip=True)
     elif args.model == 'autoencoder':
         model = Autoencoder(n_channels=3, n_classes=args.classes)
     elif args.model == 'point_unet':
