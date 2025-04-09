@@ -49,6 +49,7 @@ class CLIPSegmentationModel(nn.Module):
         super(CLIPSegmentationModel, self).__init__()
         
         self.n_classes = n_classes
+        self.n_channels = 3
         self.image_size = image_size
         self.bilinear = bilinear
         self.dropout_rate = dropout_rate
