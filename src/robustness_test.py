@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from metrics import compute_dice_per_class
 from data_loading import TestSegmentationDataset, sort_and_match_files, load_image
 from models.unet_model import UNet, PointUNet
-from models.clip_model import CLIPSegmentationModel
+from models.clip_model import CLIPSegmentationModel, CLIPUNet
 from models.autoencoder_model import Autoencoder
 
 def setup_logging():
@@ -578,6 +578,9 @@ def load_model(model_path, device, n_classes=3, model_type='unet'):
     elif model_type == 'point_unet':
         model = PointUNet(n_channels=3, n_classes=n_classes)
         is_point_model = True
+    elif model_type == 'clip_unet':
+        model = CLIPUNet(n_classes=n_classes, bilinear=False, dropout_rate=0.0)
+        is_point_model = True
     elif model_type == 'clip':
         model = CLIPSegmentationModel(n_classes=n_classes)
         is_point_model = False
@@ -607,7 +610,7 @@ def main():
     parser.add_argument('--model-path', type=str, required=True, help='Path to the model checkpoint')
     parser.add_argument('--classes', type=int, default=3, help='Number of classes')
     parser.add_argument('--img-dim', type=int, default=256, help='Image dimension')
-    parser.add_argument('--model-type', type=str, default='unet', choices=['unet', 'point_unet', 'clip', 'autoencoder'], 
+    parser.add_argument('--model-type', type=str, default='unet', choices=['unet', 'point_unet', 'clip_unet', 'clip', 'autoencoder'], 
                         help='Model type')
     parser.add_argument('--perturbation', type=str, required=True, 
                         choices=['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'all'], 

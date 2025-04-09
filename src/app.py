@@ -4,13 +4,75 @@ import numpy as np
 import torch.nn.functional as F
 from PIL import Image
 import cv2
-
-from models.unet_model import PointUNet
+from models.unet_model import UNet
+from models.autoencoder_model import Autoencoder
+from models.clip_model import CLIPUNet, PointCLIPUNet
 from data_loading import preprocessing
 
-def load_model(model_path, device):
-    """Load the point segmentation model"""
-    model = PointUNet(n_channels=3, n_classes=3, bilinear=False)
+
+# Dictionary of available models and their characteristics
+MODEL_INFO = {
+    "UNet": {
+        "class": UNet,
+        "path": "weights/best_unet.pth",
+        "requires_click": False,
+        "description": "Standard UNet model for segmentation",
+        "available": True
+    }
+}
+
+# Add models only if they're available
+MODEL_INFO.update({
+        "ClipUnet": {
+            "class": CLIPUNet,
+            "path": "weights/clip_unet.pth",
+            "requires_click": False,
+            "description": "UNet with CLIP features for better semantic understanding",
+            "available": True
+        },
+        "ClipUnetPoint": {
+            "class": PointCLIPUNet,
+            "path": "weights/clip_unet_point_based.pth",
+            "requires_click": True,
+            "description": "Click-based CLIP UNet for interactive segmentation",
+            "available": True
+        }
+})
+
+MODEL_INFO.update({
+    "AutoEncoder": {
+        "class": Autoencoder,
+        "path": "weights/best_autoencoder.pth",
+        "requires_click": False,
+        "description": "Autoencoder model for pet segmentation",
+            "available": True
+        }
+    })
+
+# Global variable to store loaded models
+loaded_models = {}
+
+def load_model(model_name, device):
+    """Load a segmentation model by name"""
+    if model_name in loaded_models:
+        return loaded_models[model_name]
+    
+    print(f"Loading {model_name}...")
+    print(MODEL_INFO[model_name])
+    
+    model_info = MODEL_INFO[model_name]
+    model_class = model_info["class"]
+    model_path = model_info["path"]
+    
+    if model_name == "UNet":
+        model = model_class(n_channels=3, n_classes=3, bilinear=False)
+    elif model_name == "ClipUnet":
+        model = model_class(n_channels=3, n_classes=3, bilinear=False)
+    elif model_name == "ClipUnetPoint":
+        model = model_class(n_channels=3, n_classes=3, bilinear=False)
+    elif model_name == "AutoEncoder":
+        model = model_class(n_channels=3, n_classes=3)
+    
     model.to(device)
     
     state_dict = torch.load(model_path, map_location=device)
@@ -20,6 +82,7 @@ def load_model(model_path, device):
         model.load_state_dict(state_dict)
     
     model.eval()
+    loaded_models[model_name] = model
     return model
 
 def create_point_heatmap(coords, image_shape, sigma=10):
@@ -41,8 +104,13 @@ def create_point_heatmap(coords, image_shape, sigma=10):
     
     return heatmap
 
-def predict_segmentation(image, coords, model, device, dim=256):
-    """Predict segmentation from image and point coordinates"""
+def predict_with_click(image, coords, model_name, status_element, device, dim=256):
+    """Predict segmentation from image and point coordinates using a click-based model"""
+    if image is None:
+        return None, "No image provided"
+    
+    print("Processing...")
+    
     # Preprocess the image
     img_np = np.array(image)
     orig_shape = img_np.shape[:2]  # Store original shape for resizing back
@@ -55,7 +123,7 @@ def predict_segmentation(image, coords, model, device, dim=256):
     img_tensor, _, _ = preprocessing(img_np, np.zeros_like(img_np[:,:,0]), mode='valTest', dim=dim)
     
     # Create heatmap from SCALED coordinates
-    heatmap = create_point_heatmap(scaled_coords, (dim, dim), sigma=5)  # Reduced sigma for more precise pointing
+    heatmap = create_point_heatmap(scaled_coords, (dim, dim), sigma=5)
     # Add batch and channel dimensions (unsqueeze twice)
     heatmap_tensor = torch.from_numpy(heatmap).float().unsqueeze(0).unsqueeze(0)
     
@@ -63,9 +131,8 @@ def predict_segmentation(image, coords, model, device, dim=256):
     img_tensor = img_tensor.unsqueeze(0).to(device)
     heatmap_tensor = heatmap_tensor.to(device)
     
-    # Print shapes for debugging
-    print(f"Image tensor shape: {img_tensor.shape}")
-    print(f"Heatmap tensor shape: {heatmap_tensor.shape}")
+    # Load model
+    model = load_model(model_name, device)
     
     # Predict
     with torch.no_grad():
@@ -113,104 +180,343 @@ def predict_segmentation(image, coords, model, device, dim=256):
     
     # Create images
     overlay_img = Image.fromarray(overlay)
-    mask_img = Image.fromarray(mask_colored)
     
-    return [
-        (overlay_img, f"Overlay - {clicked_class_name}"), 
-        (mask_img, f"Mask - {clicked_class_name}")
-    ]
+    print("Ready")
+    return overlay_img, f"Segmented {clicked_class_name}"
 
-def click_and_predict(image, evt: gr.SelectData, model, device, dim=256):
-    """Handle click event and predict segmentation"""
+def predict_without_click(image, model_name, status_element, device, dim=256):
+    """Predict segmentation from image using a non-click model"""
     if image is None:
-        return None
+        return None, "No image provided"
     
-    try:
-        # Get the coordinates from the click event
-        if hasattr(evt, 'index'):
-            coords = evt.index
-            print(f"Using click coordinates: {coords}")
-        else:
-            # If no click coordinates, use center of image as default
-            print("No click coordinates found, using center of image")
-            img_np = np.array(image)
-            h, w = img_np.shape[:2]
-            coords = (w//2, h//2)
-            print(f"Using default coordinates: {coords}")
+    print("Processing...")
+    
+    # Preprocess the image
+    img_np = np.array(image)
+    orig_shape = img_np.shape[:2]  # Store original shape for resizing back
+    
+    img_tensor, _, _ = preprocessing(img_np, np.zeros_like(img_np[:,:,0]), mode='valTest', dim=dim)
+    
+    # Prepare inputs for model
+    img_tensor = img_tensor.unsqueeze(0).to(device)
+    
+    # Load model
+    model = load_model(model_name, device)
+    
+    # Predict
+    with torch.no_grad():
+        output = model(img_tensor)
+        # Resize output to original image size
+        output = F.interpolate(output, size=orig_shape, mode='bilinear', align_corners=False)
         
-        result = predict_segmentation(image, coords, model, device, dim)
-        print("Segmentation completed successfully")
-        return result
-    except Exception as e:
-        print(f"Error in click_and_predict: {e}")
-        import traceback
-        traceback.print_exc()
-        # Return empty result on error
-        return None
+        # Get final prediction
+        prediction = torch.argmax(output, dim=1)[0].cpu().numpy()
+    
+    # Define colors for classes
+    class_colors = {
+        0: [255, 0, 0],     # Red for background
+        1: [31, 119, 180],  # Blue for cat
+        2: [255, 127, 14]   # Orange for dog
+    }
+    
+    # Create RGB segmentation mask
+    mask_colored = np.zeros((orig_shape[0], orig_shape[1], 3), dtype=np.uint8)
+    
+    # Set each class to its color
+    for class_idx, color in class_colors.items():
+        mask_colored[prediction == class_idx] = color
+    
+    # Create an overlay by blending the original image with the mask
+    alpha = 0.5
+    overlay = cv2.addWeighted(
+        img_np, 1-alpha, 
+        mask_colored, alpha, 
+        0
+    )
+    
+    # Create images
+    overlay_img = Image.fromarray(overlay)
+    
+    print("Ready")
+    return overlay_img, "Full segmentation completed"
+
+def update_status(status_element, message):
+    """Update status message in the UI"""
+    # Gradio textbox doesn't have update method, return the new value instead
+    return message
+
+def load_model_and_update_status(model_name, device):
+    """Load a model and update status"""
+    # Load the model
+    print(f"Loading {model_name}...")
+    model = load_model(model_name, device)
+    print(f"{model_name} loaded and ready")
+    
+    # Return both the status message and whether the model requires click
+    return f"{model_name} loaded and ready", MODEL_INFO[model_name]["requires_click"]
 
 def create_gradio_interface():
     # Settings
-    model_path = "weights/best_model_after_epoch_10_swept-fire-9_weighted.pth"
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     dim = 256
     
-    # Load model
-    model = load_model(model_path, device)
+    # Get list of available models
+    available_models = [name for name, info in MODEL_INFO.items() if info.get("available", False)]
+    default_model = available_models[0] if available_models else None
     
-    # Define UI components
-    with gr.Blocks() as demo:
-        gr.Markdown("# Interactive Pet Segmentation")
-        gr.Markdown("Upload an image and click on a pet (cat or dog) or background to segment it.")
-        
-        with gr.Row():
-            with gr.Column():
-                input_image = gr.Image(label="Input Image", type="pil")
-                gr.Markdown("Click on a pet (or background) to segment it")
+    if not available_models:
+        print("Error: No models available!")
+        return None
+    
+    # CSS for improved styling
+    custom_css = """
+    .model-selection {
+        margin-bottom: 15px;
+    }
+    .info-box {
+        padding: 15px;
+        background-color: #f5f5f5;
+        border-radius: 10px;
+        margin-bottom: 20px;
+    }
+    .segmentation-controls {
+        margin-top: 15px;
+    }
+    .result-area {
+        min-height: 300px;
+    }
+    .model-info {
+        margin-bottom: 20px;
+    }
+    .status-area {
+        font-weight: bold;
+    }
+    .header-area {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+    .header-title {
+        flex-grow: 1;
+    }
+    .header-controls {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+    }
+    .legend-container {
+        margin-top: 10px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+    }
+    .legend-item {
+        display: inline-block;
+        margin-right: 15px;
+    }
+    """
+    
+    # Track currently selected model - this is a plain Python variable
+    current_model_name = default_model
+    
+    # Create interface
+    with gr.Blocks(theme=gr.themes.Soft(), css=custom_css) as demo:
+        # Header area with title and run button
+        with gr.Row(elem_classes="header-area"):
+            with gr.Column(elem_classes="header-title"):
+                gr.Markdown("# Interactive Pet Segmentation")
+                gr.Markdown("Upload an image and select a model to segment pets (cats and dogs)")
             
-            with gr.Column():
-                output = gr.Gallery(
-                    label="Segmentation Result",
-                    show_label=True,
-                    elem_id="gallery",
-                    columns=2,
-                    height="auto",
-                    object_fit="contain"
+            with gr.Column(elem_classes="header-controls"):
+                run_button = gr.Button(
+                    "▶️ Run Segmentation", 
+                    variant="primary", 
+                    size="lg", 
+                    visible=True
+                )
+                status_text = gr.Textbox(
+                    label="Status", 
+                    value="Select a model", 
+                    interactive=False,
+                    elem_classes="status-area"
                 )
         
-        # Set up the click event with a completely different approach
-        def on_image_select(image, evt: gr.SelectData):
-            print(f"Event received: {evt}")
-            print(f"Image: {type(image)}")
-            print(f"Event type: {type(evt)}")
-            if hasattr(evt, 'index'):
-                print(f"Click coordinates: {evt.index}")
-            return click_and_predict(image, evt, model, device, dim)
+        # State variables
+        requires_click = gr.State(False)
         
-        # Clear the output before setting up the event handler
-        input_image.clear(outputs=output)
+        with gr.Row(equal_height=True):
+            # Left column - inputs
+            with gr.Column(scale=3):
+                with gr.Row(elem_classes="model-selection"):
+                    model_dropdown = gr.Dropdown(
+                        label="Select Model",
+                        choices=available_models,
+                        value=default_model,
+                        info="Choose a segmentation model"
+                    )
+                
+                # Input image
+                input_image = gr.Image(label="Input Image", type="pil", height=400)
+                
+                # Model info
+                with gr.Row(elem_classes="model-info"):
+                    model_info = gr.Markdown("Select a model to see information")
+                
+                with gr.Row(elem_classes="segmentation-controls"):
+                    click_text = gr.Markdown(
+                        "👆 **Click on a pet (or background) in the image to segment it**", 
+                        visible=False
+                    )
+            
+            # Right column - outputs
+            with gr.Column(scale=3):
+                output_image = gr.Image(
+                    label="Segmentation Result", 
+                    elem_classes="result-area",
+                    height=400
+                )
+                output_text = gr.Textbox(
+                    label="Result Details", 
+                    interactive=False
+                )
+                
+                # Legend moved here - right below the output
+                with gr.Row(elem_classes="legend-container"):
+                    gr.Markdown("**Legend:** 🔴 Red: Background | 🔵 Blue: Cat | 🟠 Orange: Dog")
         
-        # Register the click event
-        input_image.select(
-            fn=on_image_select,
-            inputs=[input_image],
-            outputs=output
-        )
-        
-        # Example images
-        examples = [
+        # Examples section
+        gr.Markdown("## Example Images")
+        example_images = [
             ["example1.jpg"],
             ["example2.jpg"]
         ]
         
         gr.Examples(
-            examples=examples,
-            inputs=input_image,
+            examples=example_images,
+            inputs=input_image
         )
         
-        gr.Markdown("## Legend")
-        gr.Markdown("- Red: Background")
-        gr.Markdown("- Blue: Cat")
-        gr.Markdown("- Orange: Dog")
+        # Update UI when model is selected
+        def on_model_selected(model_name):
+            nonlocal current_model_name
+            current_model_name = model_name
+            
+            if not model_name:
+                return (
+                    "No model selected", 
+                    "Please select a model",
+                    gr.update(visible=False),
+                    False
+                )
+                
+            info = MODEL_INFO[model_name]
+            needs_click = info["requires_click"]
+            
+            try:
+                load_model(model_name, device)
+                status = f"{model_name} loaded and ready"
+                
+                # Update model info text
+                model_info_text = f"**{model_name}**\n\n{info['description']}\n\n"
+                model_info_text += "⚠️ This model requires you to click on a region to segment." if needs_click else "ℹ️ This model will segment the entire image automatically."
+                
+                return (
+                    model_info_text,
+                    status,
+                    gr.update(visible=needs_click),
+                    needs_click
+                )
+            except Exception as e:
+                error_msg = f"Error loading {model_name}: {str(e)}"
+                return (
+                    f"**Error Loading Model**\n\n{str(e)}",
+                    error_msg,
+                    gr.update(visible=False),
+                    False
+                )
+        
+        # Model selection handler - now run button is always visible
+        model_dropdown.change(
+            fn=on_model_selected,
+            inputs=[model_dropdown],
+            outputs=[model_info, status_text, click_text, requires_click]
+        )
+        
+        # Click event handler
+        def on_image_click(image, evt: gr.SelectData):
+            if image is None:
+                return None, "No image uploaded"
+                
+            try:
+                if not hasattr(evt, 'index'):
+                    return None, "Click detection failed"
+                    
+                coords = evt.index
+                print(f"Click event coordinates: {coords}")
+                
+                # Use the current model name from our variable
+                if current_model_name:
+                    print(f"Using model: {current_model_name}")
+                    # Only use click-based prediction if the model requires it
+                    if MODEL_INFO[current_model_name]["requires_click"]:
+                        result_img, result_text = predict_with_click(image, coords, current_model_name, None, device, dim)
+                        return result_img, result_text
+                    else:
+                        # For non-click models, we'll ignore the click and use the run button
+                        return None, "This model doesn't use clicks. Please use the Run Segmentation button."
+                else:
+                    return None, "Please select a model first"
+            except Exception as e:
+                print(f"Error in image click: {e}")
+                import traceback
+                traceback.print_exc()
+                return None, f"Error: {str(e)}"
+        
+        # Register click handler
+        input_image.select(
+            fn=on_image_click,
+            inputs=[input_image],
+            outputs=[output_image, output_text]
+        )
+        
+        # Non-click model handler - now a common handler that checks if click is required
+        def on_run_button_click(image):
+            if image is None:
+                return None, "No image uploaded"
+            
+            try:
+                # Use the global current model
+                if current_model_name:
+                    print(f"Running segmentation with {current_model_name}")
+                    # Check if model requires click
+                    if MODEL_INFO[current_model_name]["requires_click"]:
+                        return None, "This model requires you to click on the image to segment"
+                    else:
+                        result_img, result_text = predict_without_click(image, current_model_name, None, device, dim)
+                        return result_img, result_text
+                else:
+                    return None, "Please select a model first"
+            except Exception as e:
+                print(f"Error in segmentation: {e}")
+                import traceback
+                traceback.print_exc()
+                return None, f"Error: {str(e)}"
+        
+        # Register run button handler - always visible now
+        run_button.click(
+            fn=on_run_button_click,
+            inputs=[input_image],
+            outputs=[output_image, output_text]
+        )
+        
+        # Load default model on startup
+        if default_model:
+            demo.load(
+                fn=lambda: on_model_selected(default_model),
+                inputs=None,
+                outputs=[model_info, status_text, click_text, requires_click]
+            )
     
     return demo
 
