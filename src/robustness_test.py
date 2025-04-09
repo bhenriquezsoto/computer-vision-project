@@ -580,7 +580,7 @@ def load_model(model_path, device, n_classes=3, model_type='unet'):
         is_point_model = True
     elif model_type == 'clip_unet':
         model = CLIPUNet(n_classes=n_classes, bilinear=False, dropout_rate=0.0)
-        is_point_model = True
+        is_point_model = False
     elif model_type == 'clip':
         model = CLIPSegmentationModel(n_classes=n_classes)
         is_point_model = False
