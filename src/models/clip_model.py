@@ -263,3 +263,50 @@ class UNetEncoder(nn.Module):
         
         return skips, x5
         
+
+class PointCLIPUNet(CLIPUNet):
+    """
+    CLIP-enhanced U-Net model that also uses a point prompt heatmap.
+    The heatmap is concatenated to the image before feeding to the encoder.
+    CLIP still sees only the image.
+    """
+    def __init__(self, *args, **kwargs):
+        super(PointCLIPUNet, self).__init__(*args, **kwargs)
+        self.n_image_channels = self.n_channels  # Save original image channels
+        self.n_channels += 1  # Account for the point heatmap
+        self.is_point_model = True  # Used in train.py to trigger point-based pipeline
+
+        # Re-initialize the encoder with 4-channel input
+        self.encoder = UNetEncoder(
+            in_channels=self.n_channels,
+            n_classes=self.n_classes,
+            bilinear=self.bilinear,
+            dropout_rate=self.dropout_rate
+        )
+
+    def forward(self, x, point_heatmap):
+        # x: [B, 3, H, W], point_heatmap: [B, 1, H, W]
+        x_combined = torch.cat([x, point_heatmap], dim=1)  # [B, 4, H, W]
+        
+        # Pass the combined input to the encoder
+        skips, encoder_out = self.encoder(x_combined)
+
+        # Resize the image to 224x224 for CLIP
+        resized_x = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
+        
+        # Get CLIP features
+        with torch.no_grad():
+            clip_feat = self.clip_model.encode_image(resized_x)
+
+        # Project CLIP features to the bottleneck shape
+        projected = self.projector(clip_feat)  # [B, C * H * W]
+        B, C, H, W = x.shape[0], *self.bottleneck_shape
+        clip_out = projected.view(B, C, H, W)
+
+        # Fuse features
+        if self.fuse_clip:
+            x = encoder_out + clip_out
+        else:
+            x = clip_out # Use only CLIP features
+
+        return self.decoder(x, skips)

@@ -16,7 +16,7 @@ from metrics import compute_metrics, compute_dice_per_class, compute_iou_per_cla
 from metrics import sigmoid_adaptive_focal_loss, adaptive_focal_loss_multiclass
 from test import evaluate_model
 from models.unet_model import UNet, PointUNet
-from models.clip_model import CLIPSegmentationModel, CLIPUNet
+from models.clip_model import CLIPSegmentationModel, CLIPUNet, PointCLIPUNet
 from models.autoencoder_model import Autoencoder
 from data_loading import SegmentationDataset, TestSegmentationDataset, sort_and_match_files, PointSegmentationDataset, TestPointSegmentationDataset
 
@@ -39,6 +39,8 @@ def get_model(args):
         model = Autoencoder(n_channels=3, n_classes=args.classes)
     elif args.model == 'point_unet':
         model = PointUNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear, dropout_rate=args.dropout)
+    elif args.model == 'point_clip_unet':
+        model = PointCLIPUNet(n_channels=3, n_classes=args.classes, image_size=args.img_dim, bilinear=args.bilinear, dropout_rate=args.dropout, fuse_clip=True)
     else:
         raise ValueError(f"Unsupported model: {args.model}")
     
@@ -435,7 +437,7 @@ def get_args():
     parser.add_argument('--amp', action='store_true', default=False, help='Use mixed precision')
     parser.add_argument('--bilinear', action='store_true', default=False, help='Use bilinear upsampling')
     parser.add_argument('--classes', '-c', type=int, default=3, help='Number of classes')
-    parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip', 'clip_unet', 'clip_unet_fuse', 'autoencoder', 'point_unet'], default='unet', help='Choose model')
+    parser.add_argument('--model', '-m', type=str, choices=['unet', 'clip', 'clip_unet', 'clip_unet_fuse', 'autoencoder', 'point_unet', 'point_clip_unet'], default='unet', help='Choose model')
     parser.add_argument('--class-weights', '-cw', type=float, nargs='+', default=None, help='Class weights, space-separated (e.g., -cw 0.1 0.8 0.6)')
     parser.add_argument('--dropout', '-d', type=float, default=0.0, help='Dropout rate (0.0 to 0.5 recommended)')
 
@@ -457,11 +459,23 @@ if __name__ == '__main__':
     if args.model == 'clip':
         logging.info(f'Network:\n'
                      f'\t{model.n_classes} output channels (classes)\n')
-    elif args.model == 'clip_unet' or args.model == 'clip_unet_fuse':
+    elif args.model == 'clip_unet':
         logging.info(f'Network:\n'
-                     f'\t{model.n_classes} output channels (classes)\n'
-                     f'\tUNet with {"bilinear" if model.bilinear else "transposed conv"} upscaling\n'
-                     f'\tDropout rate: {model.dropout_rate}')
+                    f'\t{model.n_channels} input channels\n'
+                    f'\t{model.n_classes} output channels (classes)\n'
+                     f'\tCLIP UNet with dropout rate: {model.dropout_rate}')
+    elif args.model == 'clip_unet_fuse':
+        logging.info(f'Network:\n'
+                    f'\t{model.n_channels} input channels\n'
+                    f'\t{model.n_classes} output channels (classes)\n'
+                    f'\tCLIP UNet with dropout rate: {model.dropout_rate}\n'
+                    f'\tCLIP fusion enabled')
+    elif args.model == 'point_clip_unet':
+        logging.info(f'Network:\n'
+                    f'\t{model.n_channels} input channels\n'
+                    f'\t{model.n_classes} output channels (classes)\n'
+                    f'\tPoint CLIP UNet with dropout rate: {model.dropout_rate}\n'
+                    f'\tCLIP fusion enabled')
     elif args.model == 'autoencoder':
         logging.info(f'Network:\n'
                     f'\t{model.n_channels} input channels\n'
