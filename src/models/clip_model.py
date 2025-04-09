@@ -248,7 +248,7 @@ class UNetDecoder(nn.Module):
         super(UNetDecoder, self).__init__()
         
         factor = 2 if bilinear else 1
-        skip_factor = 2 if use_skips and bilinear else 1
+        skip_factor = 2 if (not use_skips) and bilinear else 1
         
         self.up1 = (Up(1024 // skip_factor, 512 // factor, bilinear, dropout_rate=dropout_rate))
         self.up2 = (Up(512 // skip_factor, 256 // factor, bilinear, dropout_rate=dropout_rate))
