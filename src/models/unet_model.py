@@ -73,12 +73,13 @@ class Up(nn.Module):
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
 
+        # add padding on x1 to match x2
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2,
                         diffY // 2, diffY - diffY // 2])
         # if you have padding issues, see
         # https://github.com/HaiyongJiang/U-Net-Pytorch-Unstructured-Buggy/commit/0e854509c2cea854e247a9c615f175f76fbb2e3a
         # https://github.com/xiaopeng-liao/Pytorch-UNet/commit/8ebac70e633bac59fc22bb5195e513d5832fb3bd
-        x = torch.cat([x2, x1], dim=1)
+        x = torch.cat([x2, x1], dim=1) # concatenate along the channel dimension (skip connection)
         return self.conv(x)
 
 
@@ -93,7 +94,7 @@ class OutConv(nn.Module):
 
 
 class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=False, dropout_rate=0.0):
+    def __init__(self, n_channels, n_classes, bilinear=True, dropout_rate=0.0):
         super(UNet, self).__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
