@@ -52,7 +52,6 @@ class CLIPSegmentationModel(nn.Module):
         self.n_channels = 3
         self.image_size = image_size
         self.bilinear = bilinear
-        print("bilinear", bilinear)
         self.dropout_rate = dropout_rate
         
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -86,6 +85,7 @@ class CLIPSegmentationModel(nn.Module):
         projected = self.projector(clip_feat)  # [B, C * H * W]
         B, C, H, W = image.shape[0], *self.bottleneck_shape
         x = projected.view(B, C, H, W)  # [B, C, H, W]
+        print("billinear", self.bilinear)
 
         return self.decoder(x)
     
