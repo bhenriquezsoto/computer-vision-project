@@ -78,6 +78,7 @@ class CLIPSegmentationModel(nn.Module):
         Returns:
             Segmentation logits: [B, num_classes, H, W]
         """
+        image = F.interpolate(image, size=(224, 224), mode='bilinear', align_corners=False)
         with torch.no_grad():
             clip_feat = self.clip_model.encode_image(image)  # [B, 512]
 
@@ -127,6 +128,9 @@ class CLIPUNet(nn.Module):
         
     def forward(self, x):
         skips, encoder_out = self.encoder(x)
+        
+        image = F.interpolate(image, size=(224, 224), mode='bilinear', align_corners=False)
+
         
         with torch.no_grad():
             clip_feat = self.clip_model.encode_image(x)
