@@ -48,6 +48,11 @@ class CLIPSegmentationModel(nn.Module):
         """
         super(CLIPSegmentationModel, self).__init__()
         
+        self.n_classes = n_classes
+        self.image_size = image_size
+        self.bilinear = bilinear
+        self.dropout_rate = dropout_rate
+        
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
@@ -85,6 +90,13 @@ class CLIPSegmentationModel(nn.Module):
 class CLIPUNet(nn.Module):
     def __init__(self, n_channels=3, n_classes=3, image_size=256, bilinear=True, use_skips=True, dropout_rate=0.0, fuse_clip=True):
         super(CLIPUNet, self).__init__()
+        
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+        self.image_size = image_size
+        self.bilinear = bilinear
+        self.use_skips = use_skips
+        self.dropout_rate = dropout_rate
         
         self.fuse_clip = fuse_clip
         
