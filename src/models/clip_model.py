@@ -84,10 +84,6 @@ class CLIPSegmentationModel(nn.Module):
 
         projected = self.projector(clip_feat)  # [B, C * H * W]
         B, C, H, W = image.shape[0], *self.bottleneck_shape
-        print("NUMBER OF CHANNELS:", C)
-        print("Size clip_feat", clip_feat.shape)
-        print("Size projected", projected.shape)
-        print("Size image", image.shape)
         x = projected.view(B, C, H, W)  # [B, C, H, W]
 
         return self.decoder(x)
@@ -144,7 +140,6 @@ class CLIPUNet(nn.Module):
         
         assert encoder_out.shape == clip_out.shape, f"Encoder output shape {encoder_out.shape} does not match CLIP output shape {clip_out.shape}"
         
-        # x = torch.cat([encoder_out, clip_out], dim=1)  # Concatenate encoder output and CLIP output
         if self.fuse_clip:
             x = encoder_out + clip_out  # Add encoder output and CLIP output
         else:
@@ -204,23 +199,21 @@ class Down(nn.Module):
 
 
 class Up(nn.Module):
-    """Upscaling then double conv"""
-
-    def __init__(self, in_channels, out_channels, bilinear=True, dropout_rate=0.0):
+    def __init__(self, in_channels, out_channels, bilinear=True, dropout_rate=0.0, use_skip=True):
         super().__init__()
+        self.use_skip = use_skip
 
         # if bilinear, use the normal convolutions to reduce the number of channels
-        if bilinear:
-            print("bilinear", in_channels)
-            self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
-            self.conv = DoubleConv(in_channels, out_channels, in_channels // 2, dropout_rate=dropout_rate)
-        else:
-            print("Not bilinear, in_channels", in_channels)
-            self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
-            self.conv = DoubleConv(in_channels, out_channels, dropout_rate=dropout_rate)
+         if bilinear:
+             self.up = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+             self.conv = DoubleConv(in_channels, out_channels, in_channels // 2, dropout_rate=dropout_rate)
+         else:
+             self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+             new_in_channels = in_channels if use_skip else in_channels // 2
+             self.conv = DoubleConv(new_in_channels, out_channels, dropout_rate=dropout_rate)
 
     def forward(self, x1, x2):
-        x1 = self.up(x1)
+        x1 = self.up(x1) # now it has 512
         # input is CHW
         
         if x2 != None:
@@ -254,24 +247,16 @@ class UNetDecoder(nn.Module):
         super(UNetDecoder, self).__init__()
         
         factor = 2 if bilinear else 1
-        skip_factor = 2 if ((not use_skips) and bilinear) else 1
         
-        # self.up1 = (Up(1024 // skip_factor, 512 // factor, bilinear, dropout_rate=dropout_rate))
-        # self.up2 = (Up(512 // skip_factor, 256 // factor, bilinear, dropout_rate=dropout_rate))
-        # self.up3 = (Up(256 // skip_factor, 128 // factor, bilinear, dropout_rate=dropout_rate))
-        # self.up4 = (Up(128 // skip_factor, 64, bilinear, dropout_rate=dropout_rate))
-        # self.outc = (OutConv(64, n_classes))
-        print("factor", factor)
+        
         if use_skips:
-            print("here")
             self.up1 = (Up(1024, 512 // factor, bilinear, dropout_rate=dropout_rate))
             self.up2 = (Up(512, 256 // factor, bilinear, dropout_rate=dropout_rate))
             self.up3 = (Up(256, 128 // factor, bilinear, dropout_rate=dropout_rate))
             self.up4 = (Up(128, 64, bilinear, dropout_rate=dropout_rate))
             
         else:
-            print("here_not_skips")
-            self.up1 = (Up(1024 // factor, 512 // factor, bilinear, dropout_rate=dropout_rate))
+            self.up1 = (Up(1024 // factor, 512 // factor, bilinear, dropout_rate=dropout_rate, use_skip=False))
             self.up2 = (Up(512 // factor, 256 // factor, bilinear, dropout_rate=dropout_rate))
             self.up3 = (Up(256 // factor, 128 // factor, bilinear, dropout_rate=dropout_rate))
             self.up4 = (Up(128 // factor, 64, bilinear, dropout_rate=dropout_rate))
