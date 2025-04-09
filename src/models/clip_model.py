@@ -257,9 +257,9 @@ class UNetDecoder(nn.Module):
             
         else:
             self.up1 = (Up(1024 // factor, 512 // factor, bilinear, dropout_rate=dropout_rate, use_skip=False))
-            self.up2 = (Up(512 // factor, 256 // factor, bilinear, dropout_rate=dropout_rate))
-            self.up3 = (Up(256 // factor, 128 // factor, bilinear, dropout_rate=dropout_rate))
-            self.up4 = (Up(128 // factor, 64, bilinear, dropout_rate=dropout_rate))
+            self.up2 = (Up(512 // factor, 256 // factor, bilinear, dropout_rate=dropout_rate, use_skip=False))
+            self.up3 = (Up(256 // factor, 128 // factor, bilinear, dropout_rate=dropout_rate, use_skip=False))
+            self.up4 = (Up(128 // factor, 64, bilinear, dropout_rate=dropout_rate, use_skip=False))
             
         self.outc = (OutConv(64, n_classes))
         
