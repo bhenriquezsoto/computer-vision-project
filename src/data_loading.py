@@ -155,8 +155,8 @@ def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: i
             A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
             A.ElasticTransform(p=0.2),  # Elastic distortion
             A.GridDistortion(p=0.2),  # Slight grid warping
-            A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.4), # color jitter
-            A.GaussNoise(var_limit=(10, 50), p=0.3), # Random Gaussian noise
+            A.ColorJitter(p=0.3), # color jitter
+            A.GaussNoise(p=0.3), # Random Gaussian noise
             # A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
             # A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
             
