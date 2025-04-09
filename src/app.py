@@ -1,5 +1,12 @@
+import os
+os.system("pip show pydantic")
+os.system("pip install fastapi==0.112.2 gradio==4.44.1 torch numpy albumentations huggingface_hub")
+os.system("pip install git+https://github.com/openai/CLIP.git")
+os.system("pip install --upgrade gradio gradio-client")
+
 import gradio as gr
 import torch
+from huggingface_hub import hf_hub_download
 import numpy as np
 import torch.nn.functional as F
 from PIL import Image
@@ -7,14 +14,122 @@ import cv2
 from models.unet_model import UNet
 from models.autoencoder_model import Autoencoder
 from models.clip_model import CLIPUNet, PointCLIPUNet
-from data_loading import preprocessing
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
+# Directory to store downloaded weights
+WEIGHTS_DIR = "weights"
+os.makedirs(WEIGHTS_DIR, exist_ok=True)
+
+def download_model_weights(repo_id, filename):
+    """Download model weights from Hugging Face Hub if they don't exist locally"""
+    local_path = os.path.join(WEIGHTS_DIR, filename)
+    
+    # Check if file already exists
+    if os.path.exists(local_path):
+        print(f"Model weights already exist at {local_path}")
+        return local_path
+    
+    print(f"Downloading model weights from {repo_id}...")
+    try:
+        # Download the file from Hugging Face
+        downloaded_path = hf_hub_download(repo_id=repo_id, filename=filename)
+        
+        # If the download is to a different location, copy to our weights directory
+        if downloaded_path != local_path:
+            print(f"Copying weights from {downloaded_path} to {local_path}")
+            os.system(f"cp {downloaded_path} {local_path}")
+            
+        print(f"Downloaded model weights to {local_path}")
+        return local_path
+    except Exception as e:
+        print(f"Error downloading model weights: {e}")
+        return None
+
+# Function to preload all model weights during application startup
+def preload_all_model_weights():
+    """Download all model weights at startup"""
+    print("Preloading all model weights...")
+    
+    for model_name, model_info in MODEL_INFO.items():
+        if "huggingface_repo" in model_info and "huggingface_filename" in model_info:
+            repo_id = model_info["huggingface_repo"]
+            filename = model_info["huggingface_filename"]
+            print(f"Preloading weights for {model_name} from {repo_id}")
+            downloaded_path = download_model_weights(repo_id, filename)
+            
+            if downloaded_path:
+                print(f"Successfully preloaded weights for {model_name}")
+            else:
+                print(f"Failed to preload weights for {model_name}")
+    
+    print("Finished preloading all model weights")
+
+def preprocessing(img: np.ndarray, mask: np.ndarray, mode: str = 'train', dim: int = 256):
+    """Preprocess the image and mask for training.
+    mode 'train' is for training, applying data augmentation and resizing.
+    mode 'valTest' is for validation/testing, applying normalization only.
+    
+    Args:
+        img (np.ndarray): Image as NumPy array.
+        mask (np.ndarray): Mask as NumPy array.
+        dim (int): Target image dimension.
+        mode (str): One of 'train', 'valTest'.
+        
+    Returns:
+        Tuple[torch.Tensor]: Processed image and mask as PyTorch tensors.
+    """
+    
+    assert mode in ['train', 'valTest'], f'Invalid mode: {mode}'
+    assert dim > 0, f'Invalid image dimension: {dim}'
+    
+    # Define common transformations for standard resizing and normalization    
+    resizing = A.Compose([
+        A.LongestMaxSize(max_size=dim, interpolation=0),
+        A.PadIfNeeded(min_height=dim, min_width=dim, border_mode=0)
+    ])
+    normalisation = A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+    
+    if mode == 'valTest':
+        augmentation = A.Compose([
+            resizing,
+            normalisation,
+            ToTensorV2()
+        ])
+    else:
+        # Define transformations for augmentation
+        augmentation = A.Compose([
+            resizing,
+            
+            #### ADD AUGMENTATION HERE ####
+            
+            # A.RandomCrop(img_dim, img_dim),  # Crop to fixed size
+            A.HorizontalFlip(p=0.5),  # Flip images & masks with 50% probability
+            A.Rotate(limit=20, p=0.5),  # Random rotation (-20° to 20°)
+            # A.ElasticTransform(alpha=1, sigma=50, p=0.1),  # Elastic distortion
+            # A.GridDistortion(p=0.3),  # Slight grid warping
+            # A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),  # Color jitter
+            # A.GaussianBlur(blur_limit=(3, 7), p=0.2),  # Random blur
+            # A.GaussNoise(var_limit=(10, 50), p=0.2),  # Random noise
+            # A.CoarseDropout(max_holes=2, max_height=50, max_width=50, p=0.3),  # Cutout occlusion
+            
+            ### END AUGMENTATION ###
+            
+            normalisation, 
+            ToTensorV2()  # Convert to PyTorch tensor
+        ])
+        
+    original_mask = torch.tensor(mask, dtype=torch.long)
+    augmented = augmentation(image=img, mask=mask)
+    return augmented['image'], augmented['mask'], original_mask
 
 # Dictionary of available models and their characteristics
 MODEL_INFO = {
     "UNet": {
         "class": UNet,
         "path": "weights/best_unet.pth",
+        "huggingface_repo": "bhenriquezsoto/UNet",
+        "huggingface_filename": "best_unet.pth",
         "requires_click": False,
         "description": "Standard UNet model for segmentation",
         "available": True
@@ -26,6 +141,8 @@ MODEL_INFO.update({
         "ClipUnet": {
             "class": CLIPUNet,
             "path": "weights/clip_unet.pth",
+            "huggingface_repo": "bhenriquezsoto/ClipUNet",
+            "huggingface_filename": "clip_unet.pth",
             "requires_click": False,
             "description": "UNet with CLIP features for better semantic understanding",
             "available": True
@@ -33,6 +150,8 @@ MODEL_INFO.update({
         "ClipUnetPoint": {
             "class": PointCLIPUNet,
             "path": "weights/clip_unet_point_based.pth",
+            "huggingface_repo": "bhenriquezsoto/clipUnetPointBased",
+            "huggingface_filename": "clip_unet_point_based.pth",
             "requires_click": True,
             "description": "Click-based CLIP UNet for interactive segmentation",
             "available": True
@@ -43,11 +162,16 @@ MODEL_INFO.update({
     "AutoEncoder": {
         "class": Autoencoder,
         "path": "weights/best_autoencoder.pth",
+        "huggingface_repo": "bhenriquezsoto/autoencoder",
+        "huggingface_filename": "best_autoencoder.pth",
         "requires_click": False,
         "description": "Autoencoder model for pet segmentation",
-            "available": True
+        "available": True
         }
     })
+
+# Preload all model weights right after MODEL_INFO is defined
+preload_all_model_weights()
 
 # Global variable to store loaded models
 loaded_models = {}
@@ -64,6 +188,9 @@ def load_model(model_name, device):
     model_class = model_info["class"]
     model_path = model_info["path"]
     
+    # The weights should already be downloaded during initialization
+    # No need to download again, just use the local path
+    
     if model_name == "UNet":
         model = model_class(n_channels=3, n_classes=3, bilinear=False)
     elif model_name == "ClipUnet":
@@ -75,15 +202,21 @@ def load_model(model_name, device):
     
     model.to(device)
     
-    state_dict = torch.load(model_path, map_location=device)
-    if 'model_state_dict' in state_dict:
-        model.load_state_dict(state_dict['model_state_dict'])
-    else:
-        model.load_state_dict(state_dict)
-    
-    model.eval()
-    loaded_models[model_name] = model
-    return model
+    # Load model weights
+    try:
+        state_dict = torch.load(model_path, map_location=device)
+        if 'model_state_dict' in state_dict:
+            model.load_state_dict(state_dict['model_state_dict'])
+        else:
+            model.load_state_dict(state_dict)
+        
+        model.eval()
+        loaded_models[model_name] = model
+        print(f"Successfully loaded {model_name} from {model_path}")
+        return model
+    except Exception as e:
+        print(f"Error loading model weights from {model_path}: {e}")
+        raise
 
 def create_point_heatmap(coords, image_shape, sigma=10):
     """Create a Gaussian heatmap from point coordinates"""
@@ -385,18 +518,6 @@ def create_gradio_interface():
                 with gr.Row(elem_classes="legend-container"):
                     gr.Markdown("**Legend:** 🔴 Red: Background | 🔵 Blue: Cat | 🟠 Orange: Dog")
         
-        # Examples section
-        gr.Markdown("## Example Images")
-        example_images = [
-            ["example1.jpg"],
-            ["example2.jpg"]
-        ]
-        
-        gr.Examples(
-            examples=example_images,
-            inputs=input_image
-        )
-        
         # Update UI when model is selected
         def on_model_selected(model_name):
             nonlocal current_model_name
@@ -521,5 +642,6 @@ def create_gradio_interface():
     return demo
 
 if __name__ == "__main__":
+    # Create and launch the interface
     demo = create_gradio_interface()
     demo.launch() 
