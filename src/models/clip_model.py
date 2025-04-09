@@ -129,11 +129,11 @@ class CLIPUNet(nn.Module):
     def forward(self, x):
         skips, encoder_out = self.encoder(x)
         
-        image = F.interpolate(image, size=(224, 224), mode='bilinear', align_corners=False)
+        resized_image = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=False)
 
         
         with torch.no_grad():
-            clip_feat = self.clip_model.encode_image(x)
+            clip_feat = self.clip_model.encode_image(resized_image)
         projected = self.projector(clip_feat)  # [B, C * H * W]
         B, C, H, W = x.shape[0], *self.bottleneck_shape
         clip_out = projected.view(B, C, H, W)  # [B, C, H, W]
