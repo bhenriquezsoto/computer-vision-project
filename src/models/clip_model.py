@@ -37,28 +37,31 @@ class CLIPSegmentationModelBad(nn.Module):
         # Pass through the segmentation head
         logits = self.segmentation_head(clip_features)
         return logits
+    
+    
 class CLIPSegmentationModel(nn.Module):
-    def __init__(self, clip_model, image_size=256, embed_dim=512, num_classes=3, bilinear=True):
+    def __init__(self, num_classes=3, image_size=256, bilinear=True):
         """
         CLIP-only segmentation model. Uses CLIP's image encoder,
         projects the embedding to a spatial feature map, and
         decodes it to a segmentation mask.
         """
         super(CLIPSegmentationModel, self).__init__()
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.clip_model = clip_model
+        self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
         self.clip_model.eval()  # freeze CLIP
 
         bottleneck_channels = 512 if bilinear else 1024
         self.bottleneck_shape = (bottleneck_channels, image_size // 16, image_size // 16)
         C, H, W = self.bottleneck_shape
 
-        self.projector = nn.Linear(bottleneck_channels, C * H * W)
+        self.projector = nn.Linear(512, C * H * W)
         self.decoder = UNetDecoder(
-            in_channels=C,
-            skip_channels=[0, 0, 0, 0],  # No skips
             n_classes=num_classes,
-            bilinear=bilinear
+            bilinear=bilinear,
+            use_skips=False,
         )
 
     def forward(self, image):
@@ -75,10 +78,51 @@ class CLIPSegmentationModel(nn.Module):
         B, C, H, W = image.shape[0], *self.bottleneck_shape
         x = projected.view(B, C, H, W)  # [B, C, H, W]
 
-        # Provide dummy skips (all zeros)
-        dummy_skips = [torch.zeros((B, 0, H * 2 ** i, W * 2 ** i), device=image.device) for i in reversed(range(4))]
+        return self.decoder(x)
+    
 
-        return self.decoder(x, dummy_skips)
+class CLIPUNet(nn.Module):
+    def __init__(self, in_channels=3, n_classes=3, image_size=256, bilinear=True, use_skips=True, dropout_rate=0.0):
+        super(CLIPUNet, self).__init__()
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        self.clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+        self.clip_model.eval()  # freeze CLIP
+        
+        bottleneck_channels = 512 if bilinear else 1024
+        self.bottleneck_shape = (bottleneck_channels, image_size // 16, image_size // 16)
+        C, H, W = self.bottleneck_shape
+        self.projector = nn.Linear(512, C * H * W)
+        
+        self.encoder = UNetEncoder(
+            in_channels=in_channels, 
+            n_classes=n_classes, 
+            bilinear=bilinear, 
+            dropout_rate=dropout_rate)
+        
+        self.decoder = UNetDecoder(
+            n_classes=n_classes, 
+            bilinear=bilinear, 
+            use_skips=use_skips, 
+            dropout_rate=dropout_rate)
+        
+        
+        
+    def forward(self, x):
+        skips, encoder_out = self.encoder(x)
+        
+        with torch.no_grad():
+            clip_feat = self.clip_model.encode_image(x)
+        projected = self.projector(clip_feat)  # [B, C * H * W]
+        B, C, H, W = x.shape[0], *self.bottleneck_shape
+        clip_out = projected.view(B, C, H, W)  # [B, C, H, W]
+        
+        x = torch.cat([encoder_out, clip_out], dim=1)  # Concatenate encoder output and CLIP output
+        x = self.decoder(x, skips)
+        
+        
+    
         
 class DoubleConv(nn.Module):
     """(convolution => [BN] => ReLU) * 2"""
@@ -171,19 +215,36 @@ class OutConv(nn.Module):
     
         
 class UNetDecoder(nn.Module):
-    def __init__(self, in_channels, n_classes, bilinear=True, dropout_rate=0.0):
+    def __init__(self, n_classes, bilinear=True, use_skips=True, dropout_rate=0.0):
         super(UNetDecoder, self).__init__()
         
         factor = 2 if bilinear else 1
-
-        self.up1 = Up(in_channels, 1024 // factor, bilinear, dropout_rate=dropout_rate)
-        self.up2 = (Up(512, 256 // factor, bilinear, dropout_rate=dropout_rate))
-        self.up3 = (Up(256, 128 // factor, bilinear, dropout_rate=dropout_rate))
-        self.up4 = (Up(128, 64, bilinear, dropout_rate=dropout_rate))
+        skip_factor = 2 if use_skips and bilinear else 1
+        
+        self.up1 = (Up(1024 // skip_factor, 512 // factor, bilinear, dropout_rate=dropout_rate))
+        self.up2 = (Up(512 // skip_factor, 256 // factor, bilinear, dropout_rate=dropout_rate))
+        self.up3 = (Up(256 // skip_factor, 128 // factor, bilinear, dropout_rate=dropout_rate))
+        self.up4 = (Up(128 // skip_factor, 64, bilinear, dropout_rate=dropout_rate))
         self.outc = (OutConv(64, n_classes))
         
+        # if use_skips:
+        #     self.up1 = (Up(1024, 512 // factor, bilinear, dropout_rate=dropout_rate))
+        #     self.up2 = (Up(512, 256 // factor, bilinear, dropout_rate=dropout_rate))
+        #     self.up3 = (Up(256, 128 // factor, bilinear, dropout_rate=dropout_rate))
+        #     self.up4 = (Up(128, 64, bilinear, dropout_rate=dropout_rate))
+            
+        # else:
+        #     self.up1 = (Up(1024 // factor, 512 // factor, bilinear, dropout_rate=dropout_rate))
+        #     self.up2 = (Up(512 // factor, 256 // factor, bilinear, dropout_rate=dropout_rate))
+        #     self.up3 = (Up(256 // factor, 128 // factor, bilinear, dropout_rate=dropout_rate))
+        #     self.up4 = (Up(128 // factor, 64, bilinear, dropout_rate=dropout_rate))
+            
+        # self.outc = (OutConv(64, n_classes))
         
-    def forward(self, x, skips=[None, None, None, None]):
+        
+    def forward(self, x, skips=None):
+        if skips is None:
+            skips = [None, None, None, None]
         x = self.up1(x, skips[3])
         x = self.up2(x, skips[2])
         x = self.up3(x, skips[1])
@@ -191,3 +252,28 @@ class UNetDecoder(nn.Module):
         return self.outc(x)
     
     
+class UNetEncoder(nn.Module):
+    def __init__(self, in_channels=3, n_classes=3, bilinear=True, dropout_rate=0.0):
+        super(UNetEncoder, self).__init__()
+        
+        self.inc = (DoubleConv(in_channels, 64, dropout_rate=dropout_rate))
+        self.down1 = (Down(64, 128, dropout_rate=dropout_rate))
+        self.down2 = (Down(128, 256, dropout_rate=dropout_rate))
+        self.down3 = (Down(256, 512, dropout_rate=dropout_rate))
+        factor = 2 if bilinear else 1
+        self.down4 = (Down(512, 1024 // factor, dropout_rate=dropout_rate))
+        
+    def forward(self, x):
+        skips = []
+        x1 = self.inc(x)
+        skips.append(x1)
+        x2 = self.down1(x1)
+        skips.append(x2)
+        x3 = self.down2(x2)
+        skips.append(x3)
+        x4 = self.down3(x3)
+        skips.append(x4)
+        x5 = self.down4(x4)
+        
+        return skips, x5
+        
