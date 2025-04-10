@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from metrics import compute_dice_per_class
 from data_loading import TestSegmentationDataset, sort_and_match_files, load_image
 from models.unet_model import UNet, PointUNet
-from models.clip_model import CLIPSegmentationModel
+from models.clip_model import CLIPSegmentationModel, CLIPUNet
 from models.autoencoder_model import Autoencoder
 
 def setup_logging():
@@ -363,11 +363,25 @@ def evaluate_robustness(model, device, test_images, test_masks, perturbation_typ
                 original_shape = masks.shape[-2:]
                 
                 # Handle point model input
-                if is_point_model:
-                    points = batch['point'].to(device=device, dtype=torch.float32)
-                    outputs = model(images, points)
-                else:
-                    outputs = model(images)
+                try:
+                    if is_point_model:
+                        points = batch['point'].to(device=device, dtype=torch.float32)
+                        outputs = model(images, points)
+                    else:
+                        outputs = model(images)
+                except RuntimeError as e:
+                    if "must have the same dtype" in str(e):
+                        logging.error(f"Data type mismatch error: {e}")
+                        logging.error("This is likely a precision mismatch between CLIP (FP16) and the rest of the model (FP32).")
+                        logging.error("Verify that all CLIP outputs are properly converted to float32 before further processing.")
+                        raise
+                    elif "expected scalar type Half but found Float" in str(e):
+                        logging.error(f"CLIP model expects half precision but received full precision: {e}")
+                        logging.error("Try converting inputs to half precision before passing to CLIP.")
+                        raise
+                    else:
+                        logging.error(f"Error during model forward pass: {e}")
+                        continue  # Skip this batch and continue with next
                 
                 # Get predictions
                 if outputs.shape[1] > 1:  # Multi-class
@@ -578,6 +592,9 @@ def load_model(model_path, device, n_classes=3, model_type='unet'):
     elif model_type == 'point_unet':
         model = PointUNet(n_channels=3, n_classes=n_classes)
         is_point_model = True
+    elif model_type == 'clip_unet':
+        model = CLIPUNet(n_classes=n_classes, bilinear=False, dropout_rate=0.0)
+        is_point_model = False
     elif model_type == 'clip':
         model = CLIPSegmentationModel(n_classes=n_classes)
         is_point_model = False
@@ -607,7 +624,7 @@ def main():
     parser.add_argument('--model-path', type=str, required=True, help='Path to the model checkpoint')
     parser.add_argument('--classes', type=int, default=3, help='Number of classes')
     parser.add_argument('--img-dim', type=int, default=256, help='Image dimension')
-    parser.add_argument('--model-type', type=str, default='unet', choices=['unet', 'point_unet', 'clip', 'autoencoder'], 
+    parser.add_argument('--model-type', type=str, default='unet', choices=['unet', 'point_unet', 'clip_unet', 'clip', 'autoencoder'], 
                         help='Model type')
     parser.add_argument('--perturbation', type=str, required=True, 
                         choices=['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'all'], 
