@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 
 from metrics import compute_metrics
 from models.unet_model import UNet, PointUNet
-from models.clip_model import CLIPSegmentationModel
+from models.clip_model import CLIPSegmentationModel, CLIPUNet, PointCLIPUNet
 from models.autoencoder_model import Autoencoder
 from data_loading import TestSegmentationDataset, TestPointSegmentationDataset, sort_and_match_files
 
@@ -156,6 +156,11 @@ def main():
         model.set_phase("segmentation")
     elif args.model_type == 'point_unet':
         model = PointUNet(n_channels=3, n_classes=args.classes, bilinear=args.bilinear)
+        is_point_model = True
+    elif args.model_type == 'clip_unet':
+        model = CLIPUNet(n_classes=args.classes, bilinear=args.bilinear)
+    elif args.model_type == 'clip_point_unet':
+        model = PointCLIPUNet(n_classes=args.classes, bilinear=args.bilinear)
         is_point_model = True
     else:
         raise ValueError(f"Unsupported model type: {args.model_type}")
